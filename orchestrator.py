@@ -19,6 +19,7 @@ from zedek_logger import get_logger
 from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import gate
 import memory
+import classifier
 
 log = get_logger("orchestrator")
 
@@ -78,69 +79,66 @@ def _add_to_session(role: str, content: str) -> None:
         log.info("session_buffer_full_flushing", extra={"turns": len(SESSION_HISTORY)})
         summarize_and_flush_session()
 
-SYSTEM_PROMPT = """You are a routing assistant. Given a user request, decide which function \
-to call from this list, and with what arguments, and which domain this belongs to. \
-Respond ONLY with JSON, no other text.
-
-Available functions:
-- search_files(query: str, root_dir: str = "~") — find files by name
-- disk_usage_by_folder(root_dir: str = "~", top_n: int = 10) — largest folders
-- top_memory_processes(top_n: int = 10) — processes using the most RAM
-- free_space_summary() — overall disk space used/free
-
-Domain must be either "personal" or "academic" — pick whichever the request is more about.
-If unclear, default to "personal".
-
-IMPORTANT — only pick one of the functions above if the request CLEARLY and SPECIFICALLY
-matches it. Do not force a loose or partial match. For example, a request that merely
-mentions a place, name, or topic related to a function is NOT automatically a match for
-that function — the user must actually be asking to search files, check disk usage,
-check memory, or check free space.
-
-If the user is simply STATING A FACT about themselves (e.g. "I study at X",
-"my favorite language is Y", "I work at Z") rather than asking a question or requesting an
-action, respond with:
-{"function": "remember_fact", "args": {}, "domain": "personal", "reason": "user stated a fact"}
-
-If the request is clearly asking for some ACTION or CAPABILITY that is NOT one of the
-functions above (e.g. "book a flight", "send an email", "play music", "write code",
-"browse the web") — do NOT force it into one of the functions. Respond with:
-{"function": "unsupported", "args": {}, "domain": "personal", "reason": "brief description of what was requested"}
-
-If the request doesn't match any function, isn't a fact statement, and isn't a request for
-an unsupported action (it's a general question or conversational message), respond with:
-{"function": null, "args": {}, "domain": "personal", "reason": "general question, no system action needed"}
-
-Otherwise (a clear, specific match to one of the functions above) respond with:
-{"function": "<function_name>", "args": {"<arg_name>": "<value>"}, "domain": "personal"}
-"""
+# NOTE: SYSTEM_PROMPT (the old classification prompt) has been removed —
+# classification is now handled by classifier.py (DeBERTa zero-shot model),
+# not Llama. See route_request() below.
 
 
 def route_request(user_input: str) -> dict:
-    """Asks the local model to pick a function + args for this request."""
+    """
+    Phase 6.5: Uses the dedicated classifier (classifier.py) for intent +
+    domain, NOT Llama. Llama is only invoked afterward, and only if a real
+    function needs argument extraction (e.g. search_files needs a query).
+    This is the narrowing-of-responsibility fix: classification and
+    generation are handled by different, purpose-built models.
+    """
     log.info("routing_started", extra={"user_input": user_input})
 
-    response = ollama.chat(
-        model=ROUTING_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_input},
-        ],
-        format="json",
-    )
-    raw = response["message"]["content"]
+    intent_result = classifier.classify_intent(user_input)
+    domain = classifier.classify_domain(user_input)
 
-    try:
-        decision = json.loads(raw)
-    except json.JSONDecodeError:
-        log.info("routing_parse_failed", extra={"raw_response": raw})
-        return {"function": None, "args": {}, "reason": "could not parse routing decision"}
+    func_name = intent_result["function"]
+    confidence = intent_result["confidence"]
+
+    decision = {"function": func_name, "domain": domain, "confidence": confidence,
+                "score": intent_result["score"]}
+
+    # Only real functions (not remember_fact/unsupported/None) need argument
+    # extraction — and this is now a narrow, well-defined task for Llama,
+    # not a classification decision.
+    if func_name in AVAILABLE_FUNCTIONS:
+        decision["args"] = _extract_args(func_name, user_input)
+    else:
+        decision["args"] = {}
 
     log.info("routing_decision", extra={"decision": decision})
     return decision
 
 
-def canonicalize_fact(raw_text: str) -> str:
+def _extract_args(func_name: str, user_input: str) -> dict:
+    """
+    Narrow, single-purpose Llama call: given a function is ALREADY decided,
+    extract just its arguments from the user's text. This is a much easier
+    task than classification and Llama is reliable at it.
+    """
+    arg_prompt = f"""Extract the arguments for the function "{func_name}" from this request.
+Respond ONLY with a JSON object of argument names to values. If no specific arguments
+are mentioned, respond with {{}}.
+
+Request: {user_input}"""
+
+    response = ollama.chat(
+        model=ROUTING_MODEL,
+        messages=[{"role": "user", "content": arg_prompt}],
+        format="json",
+    )
+    try:
+        return json.loads(response["message"]["content"])
+    except json.JSONDecodeError:
+        return {}
+
+
+def canonicalize_fact(raw_text: str) -> str | None:
     """
     Rewrites a raw user statement into a clean, standardized fact before
     storage. This reduces retrieval mismatch caused by inconsistent phrasing
@@ -148,6 +146,10 @@ def canonicalize_fact(raw_text: str) -> str:
     ensuring everything stored follows the same structure and wording style,
     rather than relying purely on the embedding model to smooth over
     inconsistent raw sentences.
+
+    Returns None if no real fact/value could be extracted (guards against
+    the model fabricating a placeholder like "Unknown" when the router
+    incorrectly classified a question as a fact statement).
     """
     prompt = f"""Rewrite the following statement as a single, clean, standardized fact
 about the user. Remove filler words. Use this exact format:
@@ -158,15 +160,26 @@ Examples:
 "okay so basically i study at psg college of technology" -> "User's college: PSG College of Technology"
 "i really like python a lot" -> "User's favorite programming language: Python"
 
+If the statement does NOT actually contain a concrete fact about the user (e.g. it's a
+question, or has no real information to extract), respond with exactly: NO_FACT
+
 Statement: {raw_text}
 
-Respond with ONLY the standardized fact, nothing else."""
+Respond with ONLY the standardized fact, or NO_FACT, nothing else."""
 
     response = ollama.chat(
         model=ROUTING_MODEL,
         messages=[{"role": "user", "content": prompt}],
     )
     canonical = response["message"]["content"].strip()
+
+    # Guard: reject placeholder/empty extractions even if the model didn't
+    # correctly say NO_FACT — catches "Unknown", "N/A", "Not specified", etc.
+    rejected_markers = ["no_fact", "unknown", "n/a", "not specified", "not provided", "not given"]
+    if any(marker in canonical.lower() for marker in rejected_markers):
+        log.info("fact_extraction_rejected", extra={"raw": raw_text, "attempted": canonical})
+        return None
+
     log.info("fact_canonicalized", extra={"raw": raw_text, "canonical": canonical})
     return canonical
 
@@ -214,12 +227,28 @@ def execute(decision: dict) -> str:
     if domain not in ("personal", "academic"):
         domain = "personal"
 
+    confidence = decision.get("confidence", "high")
+    original_input = decision.get("_original_input", "")
+
+    # Low-confidence routing to anything other than a plain question is
+    # exactly the failure mode that caused the search_files/remember_fact
+    # misroutes — don't commit to an action the router itself is unsure about.
+    if confidence == "low" and func_name is not None:
+        log.info("low_confidence_routing_fallback", extra={"attempted_function": func_name,
+                                                              "user_input": original_input})
+        return answer_general_question(original_input, domain)
+
     if func_name is None:
-        return answer_general_question(decision.get("_original_input", ""), domain)
+        return answer_general_question(original_input, domain)
 
     if func_name == "remember_fact":
         fact_text = decision.get("_original_input", "")
         canonical_fact = canonicalize_fact(fact_text)
+        if canonical_fact is None:
+            # Router likely misclassified a question/non-fact as remember_fact.
+            # Don't store garbage — fall back to answering it as a question instead.
+            log.info("remember_fact_fallback_to_qa", extra={"original_input": fact_text})
+            return answer_general_question(fact_text, domain)
         memory.store(canonical_fact, domain=domain, content_type="fact")
         log.info("fact_remembered", extra={"domain": domain, "text": canonical_fact})
         return "Got it, I'll remember that."

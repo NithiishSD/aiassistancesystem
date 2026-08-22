@@ -1,0 +1,65 @@
+Phase 1 — Environment
+Conda environment (jarvis-env), Ollama running two local models — Qwen2.5-Coder-7B and Llama3.1-8B — confirmed responding, GPU/VRAM visibility confirmed via pynvml.
+2
+Phase 2 — Logging
+Structured JSON logging (zedek_logger.py) — every module writes timestamped, parseable log lines to its own file under logs/. Confirmed working across all modules.
+3
+Phase 3 — Orchestrator + system agent
+Orchestrator routes your text input to Llama3.1, which decides intent + arguments in strict JSON. Sandboxed system agent exposes 4 fixed, read-only functions (search_files, disk_usage_by_folder, top_memory_processes, free_space_summary) — no raw shell commands ever generated, all paths hard-restricted to your home directory.
+4
+Phase 4 — Tier & confirmation gate
+Every action passes through rule-based tier classification (0–3) before running. Checks both the function's arguments AND your raw wording for risk patterns. Tier 0 runs silently, Tier 1 notifies then runs, Tier 2 requires typed confirmation, Tier 3 is detected but blocked from executing (per your decision to disable it for now).
+5
+Phase 5 — Long-term memory
+ChromaDB vector store, separated into personal/academic domains, every item tagged with user_id from day one for future multi-user support. Two content types: facts (things you tell it directly) and conversation turns (auto-logged). Confirmed working with real semantic retrieval.
+6
+Phase 6 (part 1) — Short-term session context
+Rolling list of the last ~10 messages in the current session, sent verbatim with every general-question prompt — separate from ChromaDB, and fixes the earlier bug where immediate follow-up questions lost context.
+7
+Phase 6 (part 2) — Memory-aware answering
+General Q&A now retrieves relevant long-term facts + recent session turns before answering, with an explicit anti-hallucination instruction: if the answer isn't in the retrieved context, Zedek says so instead of inventing a placeholder.
+8
+Phase 6 (part 3) — Fact canonicalization
+When you state something about yourself, the router flags it as a fact (not a question or command) and rewrites it into a clean, standardized form (e.g. "User's college: PSG College of Technology") before storing — so retrieval isn't thrown off by casual, inconsistent phrasing.
+What Zedek can actually do right now, in plain terms:
+
+Answer questions about your laptop's state — free disk space, what's eating memory, find files by name — all read-only, all sandboxed to your home folder.
+Remember facts you tell it ("I study at X," "I like Y") in a standardized form, and correctly recall them later even if you phrase the follow-up question completely differently.
+Hold a real conversation — follow-ups within the same session work correctly now, not just isolated one-off Q&A.
+Refuse to make things up — if it doesn't actually know something, it says so instead of inventing an answer.
+Classify risk on every action before running it, with your own wording checked for danger patterns, not just the resolved function call.
+Keep a full audit trail — every routing decision, tier classification, memory read/write, and error is logged in structured JSON you can review.
+What it can't do yet (by design, not by accident): write code, browse the web, fill forms, touch anything outside your home directory, or do anything Tier 3 (payments, sensitive personal-info entry — intentionally disabled). No wake-word/voice input yet either — everything so far is typed, terminal-based interaction.
+
+
+
+
+
+pointing out the storage and context window problem?
+
+solution 
+This is a genuinely better design — it mirrors how memory hierarchies work in general (fast/small near you, slow/large further away), and it fixes a real inefficiency: right now we're writing "how much free space do I have → 62GB" into permanent storage, which is never useful to recall three months from now. Let me restructure this properly.
+
+New flow:
+
+During the session: everything stays in SESSION_HISTORY only (RAM, fast, no disk writes per-turn).
+When the session buffer fills up (approaching the context window limit) OR the session ends: an LLM pass reviews the buffer, extracts only what's actually worth remembering long-term, and writes just that distilled summary to ChromaDB — not the raw back-and-forth.
+Retrieval order: check SESSION_HISTORY first (already in RAM, instant), only query ChromaDB if the answer isn't in current session context
+
+
+
+That's exactly the right fix — and it directly targets the PSG College bug you hit earlier. Right now the model is forced to pick one of 4 functions or fall through to general Q&A, with nothing in between — so when a request doesn't cleanly fit, it grabs the closest-sounding function instead of admitting "none of these actually match." Let's add an explicit "doesn't fit anything" category so it stops forcing bad matches.
+
+Edited 2 files, read a file · 1 note
+
+What changed:
+
+The router now has 5 categories instead of 4 forced options: a real function match, remember_fact, unsupported (new), or general question — with explicit instruction not to force a loose/partial match into a function just because a keyword overlaps.
+The exact bug you hit ("I study at PSG College" → misrouted into search_files with a garbage path) is now covered two ways: the fact-detection rule catches that specific phrasing, and the new instruction explicitly tells the model not to force matches based on loose topical overlap.
+Anything that's clearly an action request but doesn't fit your 4 real functions (e.g. "book a flight," "play music," "write code") now honestly replies "that capability isn't built yet" instead of getting jammed into the wrong function and producing a confusing error.
+
+
+#changing the routing architectuure now seperate model will take care of the classification and llama will take care of teh responds
+
+
+Agreed — that's a cleaner separation of concerns: DeBERTa handles "what does the user want" (classification only), Llama handles "generate the actual response/extract details" (generation only). Each model does one narrow job it's actually good at, instead of one model juggling both. Let's build it.

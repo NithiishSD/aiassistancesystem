@@ -8,12 +8,19 @@ groq==0.11.0
 # --- Vector memory (used from Phase 5 onward, installed now to avoid re-setup) ---
 chromadb==0.5.20
 
+# --- Zero-shot intent classification (Phase 6.5: replaces Llama for routing) ---
+transformers==4.46.3
+torch==2.5.1
+
 # --- Orchestration / async ---
 python-dotenv==1.0.1
 
 # --- System monitoring (for VRAM/contention checks, orchestrator phase) ---
 psutil==6.1.0
 pynvml==11.5.3
+
+# --- HTTP requests (used directly for NVIDIA NIM API) ---
+requests==2.32.3
 
 # --- Logging (structured JSON) ---
 python-json-logger==2.0.7
