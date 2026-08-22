@@ -2,3 +2,5 @@ zedek-env/*
 __pycache__/
 logs/*
 *.log
+chrome-debug.log
+chroma_db/*
