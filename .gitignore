@@ -1,2 +1,4 @@
 zedek-env/*
 __pycache__/
+logs/*
+*.log

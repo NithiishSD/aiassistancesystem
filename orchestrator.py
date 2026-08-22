@@ -1,18 +1,20 @@
 """
-Phase 4: Minimal orchestrator with tier gate.
+Phase 4: Orchestrator with tier gate.
 
 Takes a text request, asks Llama3.1 (local) to decide which system_agent
 function to call (if any) and with what arguments, validates that choice
-against the allowlist, executes it, and returns a plain-language answer.
+against the allowlist, passes it through the tier gate (Phase 4) for
+classification and confirmation, then executes and returns a plain-language
+answer.
 
-This is intentionally minimal — no tier gate yet (Phase 4), no other
-agents yet (Phase 6). Just: request -> intent -> validated function call -> answer.
+Pipeline: request -> intent -> tier gate -> validated function call -> answer.
 """
 
 import json
 import ollama
 from zedek_logger import get_logger
 from system_agent import AVAILABLE_FUNCTIONS
+from tier_gate import gate
 
 log = get_logger("orchestrator")
 
@@ -60,7 +62,8 @@ def route_request(user_input: str) -> dict:
 
 
 def execute(decision: dict) -> str:
-    """Validates the routing decision against the allowlist and executes it."""
+    """Validates the routing decision against the allowlist, runs it through
+    the tier gate, and executes only if the gate allows it."""
     func_name = decision.get("function")
 
     if func_name is None:
@@ -72,6 +75,23 @@ def execute(decision: dict) -> str:
 
     args = decision.get("args", {})
     args = _coerce_arg_types(func_name, args)
+
+    gate_decision = gate(func_name, args, user_input=decision.get("_original_input", ""))
+
+    if gate_decision["action"] == "blocked":
+        return gate_decision["message"]
+
+    if gate_decision["action"] == "confirm":
+        print(gate_decision["message"])
+        answer = input("> ").strip().lower()
+        if answer != "y":
+            log.info("tier2_confirmation_denied", extra={"function": func_name})
+            return "Cancelled."
+        log.info("tier2_confirmation_granted", extra={"function": func_name})
+
+    if gate_decision["action"] == "notify":
+        print(gate_decision["message"])
+
     try:
         result = AVAILABLE_FUNCTIONS[func_name](**args)
         log.info("execution_success", extra={"function": func_name, "call_args": args})
@@ -119,11 +139,12 @@ def format_result(func_name: str, result) -> str:
 def handle(user_input: str) -> str:
     """Full pipeline: route -> validate -> execute -> answer."""
     decision = route_request(user_input)
+    decision["_original_input"] = user_input
     return execute(decision)
 
 
 if __name__ == "__main__":
-    print("=== Orchestrator Phase 4 — interactive test ===")
+    print("=== Zedek Orchestrator (Phase 4: tier gate active) — interactive test ===")
     print("Try things like: 'how much free space do I have', 'what's using the most memory', 'find my resume file'")
     print("Type 'quit' to exit.\n")
 
@@ -134,4 +155,4 @@ if __name__ == "__main__":
         if not user_input:
             continue
         answer = handle(user_input)
-        print(f"zedek: {answer}\n")
+        print(f"Zedek: {answer}\n")

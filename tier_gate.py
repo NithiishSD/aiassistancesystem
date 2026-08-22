@@ -44,8 +44,14 @@ FORCE_TIER_2_PATTERNS = [
 ]
 
 
-def classify(func_name: str, args: dict) -> int:
-    """Returns the tier (0-3) for a proposed action."""
+def classify(func_name: str, args: dict, user_input: str = "") -> int:
+    """Returns the tier (0-3) for a proposed action.
+
+    Checks BOTH the resolved function arguments AND the user's original
+    raw request text — a risky word (e.g. "delete") might appear in what
+    the user said without surviving into the function's actual arguments,
+    and that gap should not silently downgrade the tier.
+    """
     if func_name not in FUNCTION_TIERS:
         log.info("unknown_function_fail_safe", extra={"function": func_name})
         return 3  # unknown function = treat as highest risk, blocks by default
@@ -53,28 +59,29 @@ def classify(func_name: str, args: dict) -> int:
     base_tier = FUNCTION_TIERS[func_name]
 
     arg_text = " ".join(str(v).lower() for v in args.values())
+    combined_text = f"{arg_text} {user_input.lower()}"
 
     for pattern in FORCE_TIER_3_PATTERNS:
-        if pattern in arg_text:
+        if pattern in combined_text:
             log.info("tier_forced_3", extra={"function": func_name, "pattern": pattern})
             return 3
 
     for pattern in FORCE_TIER_2_PATTERNS:
-        if pattern in arg_text:
+        if pattern in combined_text:
             log.info("tier_forced_2", extra={"function": func_name, "pattern": pattern})
             return max(base_tier, 2)
 
     return base_tier
 
 
-def gate(func_name: str, args: dict) -> dict:
+def gate(func_name: str, args: dict, user_input: str = "") -> dict:
     """
     Runs classification and returns a decision object telling the caller
     (orchestrator) how to proceed:
 
         {"tier": int, "action": "auto" | "notify" | "confirm" | "blocked", "message": str}
     """
-    tier = classify(func_name, args)
+    tier = classify(func_name, args, user_input)
     log.info("gate_decision", extra={"function": func_name, "tier": tier})
 
     if tier == 0:
