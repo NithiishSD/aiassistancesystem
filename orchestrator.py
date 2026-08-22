@@ -91,16 +91,27 @@ Available functions:
 Domain must be either "personal" or "academic" — pick whichever the request is more about.
 If unclear, default to "personal".
 
-IMPORTANT — if the user is simply STATING A FACT about themselves (e.g. "I study at X",
+IMPORTANT — only pick one of the functions above if the request CLEARLY and SPECIFICALLY
+matches it. Do not force a loose or partial match. For example, a request that merely
+mentions a place, name, or topic related to a function is NOT automatically a match for
+that function — the user must actually be asking to search files, check disk usage,
+check memory, or check free space.
+
+If the user is simply STATING A FACT about themselves (e.g. "I study at X",
 "my favorite language is Y", "I work at Z") rather than asking a question or requesting an
 action, respond with:
 {"function": "remember_fact", "args": {}, "domain": "personal", "reason": "user stated a fact"}
 
-If the request doesn't match any function and isn't a fact statement (it's a general
-question), respond with:
+If the request is clearly asking for some ACTION or CAPABILITY that is NOT one of the
+functions above (e.g. "book a flight", "send an email", "play music", "write code",
+"browse the web") — do NOT force it into one of the functions. Respond with:
+{"function": "unsupported", "args": {}, "domain": "personal", "reason": "brief description of what was requested"}
+
+If the request doesn't match any function, isn't a fact statement, and isn't a request for
+an unsupported action (it's a general question or conversational message), respond with:
 {"function": null, "args": {}, "domain": "personal", "reason": "general question, no system action needed"}
 
-Otherwise respond with:
+Otherwise (a clear, specific match to one of the functions above) respond with:
 {"function": "<function_name>", "args": {"<arg_name>": "<value>"}, "domain": "personal"}
 """
 
@@ -212,6 +223,12 @@ def execute(decision: dict) -> str:
         memory.store(canonical_fact, domain=domain, content_type="fact")
         log.info("fact_remembered", extra={"domain": domain, "text": canonical_fact})
         return "Got it, I'll remember that."
+
+    if func_name == "unsupported":
+        reason = decision.get("reason", "this request")
+        log.info("unsupported_capability_requested", extra={"reason": reason,
+                                                               "user_input": decision.get("_original_input", "")})
+        return f"That capability ({reason}) isn't built yet — it's on the roadmap and still in progress."
 
     if func_name not in AVAILABLE_FUNCTIONS:
         log.info("execution_blocked_not_in_allowlist", extra={"attempted_function": func_name})
