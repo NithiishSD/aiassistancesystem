@@ -77,3 +77,7 @@ Next milestone: coding specialist + verifier scaffold
 Python syntax verification, and bounded bubblewrap execution for Python
 snippets. Provider-backed generation and repository test execution remain
 separate follow-up milestones.
+
+The orchestrator now routes coding requests to the specialist's plan-only
+response. It reports that no files changed and waits for explicit approval;
+automatic patching is not enabled yet.

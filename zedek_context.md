@@ -117,7 +117,8 @@ actively verifying behavior, not a one-shot build.
   distinguishes "fact" vs "conversation".
 - `classifier.py` — DeBERTa-v3 zero-shot intent + domain classifier, CPU-only.
   Categories: search_files, disk_usage_by_folder, top_memory_processes,
-  free_space_summary, remember_fact, correct_fact, unsupported, general_question.
+  free_space_summary, remember_fact, correct_fact, coding_task, unsupported,
+  general_question.
 - `orchestrator.py` — the main pipeline. Routes via classifier.py, extracts
   args via a narrow Llama call, runs through tier_gate, executes or answers,
   manages SESSION_HISTORY and memory flush. This is the file most actively
@@ -222,6 +223,8 @@ actively verifying behavior, not a one-shot build.
 - `coding_agent.py` has focused tests for planning, Python syntax verification,
   and bubblewrap execution. Provider-backed generation is not wired or tested
   yet.
+- Coding requests now receive a dedicated plan-only response from the
+  orchestrator and require explicit approval before future patching work.
 - Sandboxed Python execution exists through bubblewrap; broader repository
   mutation and test execution remain deliberately restricted.
 - No evaluator/verifier agent yet.

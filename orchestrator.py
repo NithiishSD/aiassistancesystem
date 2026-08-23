@@ -20,10 +20,12 @@ from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import gate
 import memory
 import classifier
+from coding_agent import CodingSpecialist
 
 log = get_logger("orchestrator")
 
 ROUTING_MODEL = "llama3.1:8b"
+CODING_SPECIALIST = CodingSpecialist()
 
 # --- Short-term session context (this run only, NOT persisted to disk) ---
 # Separate from memory.py's long-term ChromaDB store. This holds the last
@@ -363,6 +365,16 @@ Answer the user's latest message concisely, using the conversation so far as con
     return answer
 
 
+def format_coding_plan(plan: dict) -> str:
+    """Present a coding plan without implying that files were changed."""
+    steps = "\n".join(f"{index}. {step}" for index, step in enumerate(plan["steps"], start=1))
+    return (
+        f"I can help with this coding task: {plan['goal']}\n\n"
+        f"Proposed plan:\n{steps}\n\n"
+        "No files have been changed. Approve this plan when you want me to continue."
+    )
+
+
 def execute(decision: dict) -> str:
     """Validates the routing decision against the allowlist, runs it through
     the tier gate, and executes only if the gate allows it."""
@@ -399,6 +411,11 @@ def execute(decision: dict) -> str:
 
     if func_name == "correct_fact":
         return _handle_correction(decision.get("_original_input", ""), domain)
+
+    if func_name == "coding_task":
+        plan = CODING_SPECIALIST.plan_task(original_input)
+        log.info("coding_plan_created", extra={"user_input": original_input, "steps": len(plan["steps"])})
+        return format_coding_plan(plan)
 
     if func_name == "unsupported":
         reason = decision.get("reason", "this request")

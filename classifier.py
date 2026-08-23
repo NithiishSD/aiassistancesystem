@@ -49,6 +49,7 @@ INTENT_LABELS = {
     "directory_size": "a request to check the total size of a specific folder or the current working directory",
     "remember_fact": "the user stating or declaring a new fact about themselves",
     "correct_fact": "the user correcting, retracting, or saying something previously stated is now false or outdated",
+    "coding_task": "a request to inspect, explain, fix, or write software code",
     "unsupported": "a request for the assistant to perform an action like booking, sending, playing media, or writing code",
     "general_question": "a general question, or a conversational message that is not a command",
 }
