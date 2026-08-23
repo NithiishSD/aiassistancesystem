@@ -248,7 +248,11 @@ Which numbered fact (if any) does this correction contradict/replace? Respond wi
 a JSON object: {{"index": <number or null>, "corrected_fact": "User's <attribute>: <new value>" or null}}
 If none of the candidates are actually related to this correction, use null for both fields."""
 
-    llm_result = llm_provider.generate_chat([{"role": "user", "content": prompt}], json_mode=True)
+    llm_result = llm_provider.generate_chat(
+        [{"role": "user", "content": prompt}],
+        json_mode=True,
+        task="fact_handling",
+    )
     try:
         result = json.loads(llm_result["answer"])
     except json.JSONDecodeError:
@@ -280,7 +284,10 @@ Write a brief (1-2 sentence), warm, natural acknowledgment. You may ask a short,
 relevant follow-up question if it fits naturally. Do NOT invent or assume any
 details the user didn't actually say — only react to what's explicitly stated."""
 
-    result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+    result = llm_provider.generate_chat(
+        [{"role": "user", "content": prompt}],
+        task="fact_handling",
+    )
     return result["answer"].strip()
 
 
@@ -313,7 +320,10 @@ Statement: {raw_text}
 
 Respond with ONLY the standardized fact, or NO_FACT, nothing else."""
 
-    result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+    result = llm_provider.generate_chat(
+        [{"role": "user", "content": prompt}],
+        task="fact_handling",
+    )
     canonical = result["answer"].strip()
     canonical = canonical.strip('"').strip("'")  # strip stray wrapping quotes the model sometimes adds
 
@@ -384,7 +394,7 @@ Answer the user's latest message concisely, using the conversation so far as con
     messages.extend(SESSION_HISTORY)
     messages.append({"role": "user", "content": user_input})
 
-    result = llm_provider.generate_chat(messages)
+    result = llm_provider.generate_chat(messages, task="general_qa")
     answer = result["answer"]
     log.info("general_qa_answered", extra={"facts_used": len(relevant_facts),
                                              "session_turns_used": len(SESSION_HISTORY),
@@ -510,7 +520,10 @@ Answer their question using ONLY the data above. Do not invent process names,
 memory values, or running times not present in the data. If the data doesn't
 contain enough information to answer, say so plainly."""
 
-    result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+    result = llm_provider.generate_chat(
+        [{"role": "user", "content": prompt}],
+        task="process_reasoning",
+    )
     return result["answer"]
 
 

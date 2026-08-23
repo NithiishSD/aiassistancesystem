@@ -116,11 +116,11 @@ actively verifying behavior, not a one-shot build.
   commands. Static checks block Tier 3 patterns, safely execute recognized
   read-only commands, and pass write/destructive commands to the normal tier
   gate; isolated destructive dry-runs are not implemented yet.
-- `llm_provider.py` — shared tiered provider chain: Gemini, Groq, NVIDIA NIM,
-  OpenRouter, Cerebras, and local Ollama fallback. It returns both the
-  generated answer and the provider source for transparency. Cloud use can be
-  disabled globally with `ALLOW_CLOUD=false`, or bypassed per call with
-  `force_local=True`; either route goes directly to local Ollama.
+- `llm_provider.py` — shared task-aware provider chain: Gemini, Groq, NVIDIA
+  NIM, OpenRouter, Cerebras, and local Ollama fallback. It returns both the
+  generated answer and provider source. Coding prompts are cloud-enabled by
+  default after secret redaction, while private-key material forces local
+  execution. `ALLOW_CLOUD=false` and `force_local=True` bypass cloud entirely.
 - `memory.py` — ChromaDB wrapper. `store()`/`retrieve()`/`delete_by_ids()`.
   Domain-partitioned ("personal"/"academic"), user_id-tagged, content_type
   distinguishes "fact" vs "conversation".
@@ -139,9 +139,9 @@ actively verifying behavior, not a one-shot build.
 - `coding_agent.py` — narrow coding specialist and verifier workflow following
   plan -> patch -> test -> verify, with bounded Python execution through
   bubblewrap. It now generates request-specific plans and Python patches through
-  `llm_provider`, retries failed syntax or sandbox verification once, keeps
-  coding generation local by default, applies resource limits in the sandbox,
-  and does not yet write generated patches back to repository files.
+  the coding provider profile, retries failed syntax or sandbox verification
+  once, applies resource limits in the sandbox, and does not yet write
+  generated patches back to repository files.
 - `.env.example` — template for API keys (Gemini, Groq, NVIDIA, GitHub
   Models, Cerebras). Real `.env` is gitignored, never commit it.
 - `cleanup_garbage_facts.py` — one-time script, already used to clean up
@@ -239,10 +239,11 @@ actively verifying behavior, not a one-shot build.
   bubblewrap execution. Its generation loop now uses `llm_provider`, retries a
   failed generated patch once, and is dispatched by `coding_task`; live
   provider calls and repository patch application still need testing/building.
-- `llm_provider.py` supports global and per-call local-only operation. With
-  `ALLOW_CLOUD=false` or `force_local=True`, it skips all cloud providers and
-  uses local Ollama directly; normal operation uses the dynamic NVIDIA and
-  OpenRouter model resolvers with one-hour catalog caching.
+- `llm_provider.py` supports task-aware provider ordering and global/per-call
+  local-only operation. Coding messages are scrubbed for common secrets before
+  cloud use; private-key blocks force local execution. `ALLOW_CLOUD=false` or
+  `force_local=True` skips all cloud providers, while NVIDIA/OpenRouter model
+  catalogs remain cached for one hour.
 - Coding requests now pass through the tier gate before generating and running
   code in the resource-limited sandbox; repository patching still requires a
   future explicit approval workflow.

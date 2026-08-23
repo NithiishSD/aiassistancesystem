@@ -8,8 +8,9 @@ since free-tier model availability rotates frequently.
 from __future__ import annotations
 
 import os
+import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 import requests
 from dotenv import load_dotenv
@@ -38,7 +39,68 @@ OPENROUTER_CODING_CANDIDATES = [
     "z-ai/glm-4.5-air:free",
 ]
 
+TASK_PROVIDERS: dict[str, list[str]] = {
+    "coding": ["nvidia_nim", "openrouter", "groq", "local"],
+    "general_qa": ["gemini", "groq", "cerebras", "local"],
+    "fact_handling": ["gemini", "groq", "local"],
+    "process_reasoning": ["openrouter", "gemini", "cerebras", "local"],
+}
+DEFAULT_CHAIN = ["gemini", "groq", "nvidia_nim", "openrouter", "cerebras", "local"]
+
+_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("generic_api_key", re.compile(r"(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}['\"]?")),
+    ("bearer_token", re.compile(r"(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}")),
+    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")),
+    ("password_assignment", re.compile(r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"]?[^\s'\"]{6,}['\"]?")),
+    ("db_connection_string", re.compile(r"(?i)(postgres|mysql|mongodb|redis)(\+\w+)?://[^\s'\"]+")),
+    ("nvapi_key", re.compile(r"nvapi-[A-Za-z0-9_-]{20,}")),
+    ("openai_style_key", re.compile(r"sk-[A-Za-z0-9_-]{20,}")),
+]
+_HARD_BLOCK_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("private_key_block", re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA |)PRIVATE KEY-----")),
+]
+
 _model_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+class AllProvidersUnavailableError(RuntimeError):
+    """Raised when all configured providers, including local Ollama, fail."""
+
+
+def scrub_secrets(text: str) -> tuple[str, list[str]]:
+    """Redact common credentials before content is sent to a cloud provider."""
+    found: list[str] = []
+    for name, pattern in _SECRET_PATTERNS:
+        if pattern.search(text):
+            found.append(name)
+            text = pattern.sub("[REDACTED]", text)
+    return text, found
+
+
+def contains_hard_block(text: str) -> str | None:
+    """Return a hard-block match for content that must remain local."""
+    for name, pattern in _HARD_BLOCK_PATTERNS:
+        if pattern.search(text):
+            return name
+    return None
+
+
+def sanitize_messages_for_cloud(
+    messages: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[str], bool]:
+    """Scrub secrets from messages and detect content that must stay local."""
+    scrubbed: list[dict[str, str]] = []
+    all_found: list[str] = []
+    hard_block = False
+    for message in messages:
+        content = message.get("content", "")
+        if contains_hard_block(content):
+            hard_block = True
+        clean, found = scrub_secrets(content)
+        all_found.extend(found)
+        scrubbed.append({**message, "content": clean})
+    return scrubbed, all_found, hard_block
 
 
 def cloud_enabled() -> bool:
@@ -49,6 +111,11 @@ def cloud_enabled() -> bool:
     shell before running, to force local-only mode without touching code.
     """
     return os.getenv("ALLOW_CLOUD", "true").strip().lower() not in ("false", "0", "no")
+
+
+def cloud_coding_allowed() -> bool:
+    """Return whether coding prompts may use cloud providers after sanitization."""
+    return os.getenv("ALLOW_CLOUD_CODING", "true").strip().lower() not in ("false", "0", "no")
 
 
 def _cached_fetch(key: str, fetch_fn) -> list[str]:
@@ -162,6 +229,56 @@ def _gemini(messages: list[dict[str, str]], json_mode: bool) -> str:
     return "".join(part["text"] for part in parts)
 
 
+def _groq(messages: list[dict[str, str]], json_mode: bool) -> str:
+    return _openai_compatible(
+        "groq",
+        "https://api.groq.com/openai/v1/chat/completions",
+        os.getenv("GROQ_API_KEY", ""),
+        os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        messages,
+        json_mode,
+    )
+
+
+def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> str:
+    api_key = os.getenv("NVIDIA_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("nvidia_nim API key is not configured")
+    return _openai_compatible(
+        "nvidia_nim",
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+        api_key,
+        resolve_nvidia_model(),
+        messages,
+        json_mode,
+    )
+
+
+def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> str:
+    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("openrouter API key is not configured")
+    return _openai_compatible(
+        "openrouter",
+        "https://openrouter.ai/api/v1/chat/completions",
+        api_key,
+        resolve_openrouter_model(),
+        messages,
+        json_mode,
+    )
+
+
+def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> str:
+    return _openai_compatible(
+        "cerebras",
+        "https://api.cerebras.ai/v1/chat/completions",
+        os.getenv("CEREBRAS_API_KEY", ""),
+        os.getenv("CEREBRAS_MODEL", "llama3.1-8b"),
+        messages,
+        json_mode,
+    )
+
+
 def _local(messages: list[dict[str, str]], json_mode: bool) -> str:
     options: dict[str, Any] = {}
     if json_mode:
@@ -170,85 +287,73 @@ def _local(messages: list[dict[str, str]], json_mode: bool) -> str:
     return response["message"]["content"]
 
 
+_PROVIDER_FUNCS: dict[str, Callable[[list[dict[str, str]], bool], str]] = {
+    "gemini": _gemini,
+    "groq": _groq,
+    "nvidia_nim": _nvidia_nim,
+    "openrouter": _openrouter,
+    "cerebras": _cerebras,
+}
+
+
+def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool) -> dict[str, str]:
+    try:
+        answer = _local(messages, json_mode)
+    except Exception as error:
+        log.info("local_fallback_failed", extra={"error": str(error)})
+        raise AllProvidersUnavailableError(
+            "All cloud providers failed and local Ollama is unavailable. "
+            f"Check `ollama serve` and `ollama pull {LOCAL_MODEL}`."
+        ) from error
+    log.info("provider_response", extra={"source": "local"})
+    return {"answer": answer, "source": "local"}
+
+
 def generate_chat(
     messages: list[dict[str, str]],
     json_mode: bool = False,
     force_local: bool = False,
+    task: str | None = None,
 ) -> dict[str, str]:
-    """Generate a response using the first configured provider that succeeds.
+    """Generate a response using a task-aware provider chain.
 
-    Cloud providers are skipped entirely (going straight to local Ollama)
-    when force_local=True, or when ALLOW_CLOUD is turned off via env var —
-    see cloud_enabled(). Use this to go fully offline/private on demand,
-    e.g. for sensitive personal-agent tasks, without editing this file.
+    Coding prompts are sanitized before cloud use and remain local when cloud
+    coding is disabled or hard-blocked by private-key material.
     """
+    if task == "coding" and not force_local:
+        if not cloud_coding_allowed():
+            force_local = True
+        else:
+            original_messages = messages
+            sanitized, secret_kinds, hard_block = sanitize_messages_for_cloud(messages)
+            if secret_kinds:
+                log.info("secrets_redacted", extra={"kinds": secret_kinds})
+            if hard_block:
+                log.info("hard_block_forcing_local", extra={})
+                force_local = True
+                messages = original_messages
+            else:
+                messages = sanitized
+
     if force_local or not cloud_enabled():
-        answer = _local(messages, json_mode)
-        log.info("provider_response", extra={"source": "local", "cloud_disabled": True})
-        return {"answer": answer, "source": "local"}
+        return _run_local_or_raise(messages, json_mode)
 
-    providers = [
-        (
-            "gemini",
-            lambda: _gemini(messages, json_mode),
-        ),
-        (
-            "groq",
-            lambda: _openai_compatible(
-                "groq",
-                "https://api.groq.com/openai/v1/chat/completions",
-                os.getenv("GROQ_API_KEY", ""),
-                os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-                messages,
-                json_mode,
-            ),
-        ),
-        (
-            "nvidia_nim",
-            lambda: _openai_compatible(
-                "nvidia_nim",
-                "https://integrate.api.nvidia.com/v1/chat/completions",
-                os.getenv("NVIDIA_API_KEY", ""),
-                resolve_nvidia_model(),
-                messages,
-                json_mode,
-            ),
-        ),
-        (
-            "openrouter",
-            lambda: _openai_compatible(
-                "openrouter",
-                "https://openrouter.ai/api/v1/chat/completions",
-                os.getenv("OPENROUTER_API_KEY", ""),
-                resolve_openrouter_model(),
-                messages,
-                json_mode,
-            ),
-        ),
-        (
-            "cerebras",
-            lambda: _openai_compatible(
-                "cerebras",
-                "https://api.cerebras.ai/v1/chat/completions",
-                os.getenv("CEREBRAS_API_KEY", ""),
-                os.getenv("CEREBRAS_MODEL", "llama3.1-8b"),
-                messages,
-                json_mode,
-            ),
-        ),
-    ]
-
-    for source, provider in providers:
+    chain = TASK_PROVIDERS.get(task, DEFAULT_CHAIN) if task else DEFAULT_CHAIN
+    for source in chain:
+        if source == "local":
+            continue
+        provider = _PROVIDER_FUNCS.get(source)
+        if provider is None:
+            log.info("unknown_provider_in_chain", extra={"source": source})
+            continue
         try:
-            answer = provider()
+            answer = provider(messages, json_mode)
             log.info("provider_response", extra={"source": source})
             return {"answer": answer, "source": source}
         except Exception as error:
             log.info("provider_failed", extra={"source": source, "error": str(error)})
 
-    answer = _local(messages, json_mode)
-    log.info("provider_response", extra={"source": "local"})
-    return {"answer": answer, "source": "local"}
+    return _run_local_or_raise(messages, json_mode)
 
 
 if __name__ == "__main__":
