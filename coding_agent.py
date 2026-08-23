@@ -12,6 +12,10 @@ orchestrator and the existing tier gate.
 from __future__ import annotations
 
 import ast
+import os
+import shutil
+import subprocess
+import tempfile
 from typing import Any
 
 
@@ -88,6 +92,79 @@ class Verifier:
             "valid": valid,
             "issues": [] if valid else ["Python syntax error or invalid code snippet"],
             "status": "pass" if valid else "fail",
+        }
+
+
+class SandboxedPythonRunner:
+    """Run generated Python in a network-isolated bubblewrap sandbox."""
+
+    def __init__(self, timeout_seconds: int = 5, max_output_bytes: int = 16_384) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.max_output_bytes = max_output_bytes
+        self.verifier = Verifier()
+
+    def run(self, code: str) -> dict[str, Any]:
+        """Execute valid Python without shell parsing or project filesystem access."""
+        if not self.verifier.verify_python(code):
+            return {"status": "rejected", "returncode": None, "stdout": "", "stderr": "invalid Python"}
+
+        bubblewrap = shutil.which("bwrap")
+        # Use the system interpreter because the active Conda launcher may be a
+        # symlink whose target is outside the sandbox's explicitly mounted paths.
+        python = "/usr/bin/python3"
+        if bubblewrap is None or not os.path.exists(python):
+            return {"status": "unavailable", "returncode": None, "stdout": "", "stderr": "bubblewrap or python3 is unavailable"}
+
+        with tempfile.TemporaryDirectory(prefix="zedek-code-") as workspace:
+            script_path = os.path.join(workspace, "main.py")
+            with open(script_path, "w", encoding="utf-8") as script:
+                script.write(code)
+
+            command = [
+                bubblewrap,
+                "--unshare-all",
+                "--die-with-parent",
+                "--new-session",
+                "--clearenv",
+                "--setenv", "PATH", "/usr/bin:/bin",
+                "--ro-bind", "/usr", "/usr",
+                "--ro-bind", "/bin", "/bin",
+                "--ro-bind", "/lib", "/lib",
+                "--ro-bind", "/lib64", "/lib64",
+                "--proc", "/proc",
+                "--dev", "/dev",
+                "--tmpfs", "/tmp",
+                "--dir", "/sandbox",
+                "--ro-bind", script_path, "/sandbox/main.py",
+                "--chdir", "/sandbox",
+                "--", python, "/sandbox/main.py",
+            ]
+
+            try:
+                completed = subprocess.run(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                return {
+                    "status": "timeout",
+                    "returncode": None,
+                    "stdout": (error.stdout or "")[: self.max_output_bytes],
+                    "stderr": (error.stderr or "")[: self.max_output_bytes],
+                }
+            except OSError as error:
+                return {"status": "unavailable", "returncode": None, "stdout": "", "stderr": str(error)}
+
+        return {
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[: self.max_output_bytes],
+            "stderr": completed.stderr[: self.max_output_bytes],
         }
 
 

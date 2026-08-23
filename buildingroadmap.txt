@@ -73,6 +73,7 @@ The capability doesn't actually exist — we have disk_usage_by_folder (lists th
 The confidence score was 0.403 — barely above our 0.35 threshold — yet got labeled "high." That's a real calibration problem. A borderline score like that shouldn't be treated as confident.
 
 Next milestone: coding specialist + verifier scaffold
-`coding_agent.py` now provides a narrow plan -> patch -> test -> verify workflow
-and Python syntax verification. Provider-backed generation and real sandboxed
-execution remain separate follow-up milestones.
+`coding_agent.py` now provides a narrow plan -> patch -> test -> verify workflow,
+Python syntax verification, and bounded bubblewrap execution for Python
+snippets. Provider-backed generation and repository test execution remain
+separate follow-up milestones.

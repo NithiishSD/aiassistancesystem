@@ -122,9 +122,10 @@ actively verifying behavior, not a one-shot build.
   args via a narrow Llama call, runs through tier_gate, executes or answers,
   manages SESSION_HISTORY and memory flush. This is the file most actively
   under development.
-- `coding_agent.py` — narrow coding specialist and verifier scaffold following
-  plan -> patch -> test -> verify (NOT execution — no sandboxed code execution
-  exists yet, and provider-backed generation is not wired into this scaffold).
+- `coding_agent.py` — narrow coding specialist and verifier workflow following
+  plan -> patch -> test -> verify, with bounded Python execution through
+  bubblewrap. Provider-backed generation and repository patching are not wired
+  into this scaffold yet.
 - `.env.example` — template for API keys (Gemini, Groq, NVIDIA, GitHub
   Models, Cerebras). Real `.env` is gitignored, never commit it.
 - `cleanup_garbage_facts.py` — one-time script, already used to clean up
@@ -218,9 +219,11 @@ actively verifying behavior, not a one-shot build.
 - The recent ambiguity/tone pass is complete and verified: short gratitude
   phrases like "okay thank you" no longer trigger `correct_fact`, and the
   literal "astro" clarification flow now resolves the meaning before answering.
-- `coding_agent.py` has focused tests for planning and Python syntax
-  verification; provider-backed generation is not wired or tested yet.
-- No sandboxed code EXECUTION exists yet — only code generation.
+- `coding_agent.py` has focused tests for planning, Python syntax verification,
+  and bubblewrap execution. Provider-backed generation is not wired or tested
+  yet.
+- Sandboxed Python execution exists through bubblewrap; broader repository
+  mutation and test execution remain deliberately restricted.
 - No evaluator/verifier agent yet.
 - No watchdog, no security module, no wake-word listener, no remaining
   specialist agents (research, web) yet.
@@ -242,18 +245,15 @@ actively verifying behavior, not a one-shot build.
 
 ## Next steps (in the order previously agreed, now continuing from the current state)
 
-1. **Test coding_agent.py end-to-end** with real free-tier API keys.
+1. **Test provider-backed coding generation** with real free-tier API keys.
 2. **Coding specialist + verifier loop (OpenHands / SWE-agent pattern)** —
    add a dedicated coding sub-agent that follows a plan → patch → test → verify
    loop, rather than trying to do everything in one step. This is a proven
    architecture pattern for code-heavy tasks and is especially useful for
    repo changes, bug fixing, and validation workflows.
-3. **Sandboxed code EXECUTION** for the coding agent (running generated
-   code/tests) — this needs REAL sandboxing (container or tightly
-   restricted subprocess), unlike system_agent.py's lightweight function
-   allowlist, because arbitrary generated code is a fundamentally larger
-   risk surface. This was explicitly flagged as needed before the coding
-   agent does anything beyond generation.
+3. **Expand sandboxed execution carefully** to support isolated test runs;
+  the current bubblewrap runner handles Python snippets only and does not
+  expose the repository or arbitrary shell commands.
 4. **Evaluator/verifier agent** — separate from the task agent and the
    watchdog, ideally using a different model than whichever one performed
    the task, to catch hallucinated/wrong content (see known issue #3 above,
