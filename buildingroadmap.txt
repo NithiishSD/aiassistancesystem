@@ -63,3 +63,11 @@ Anything that's clearly an action request but doesn't fit your 4 real functions 
 
 
 Agreed — that's a cleaner separation of concerns: DeBERTa handles "what does the user want" (classification only), Llama handles "generate the actual response/extract details" (generation only). Each model does one narrow job it's actually good at, instead of one model juggling both. Let's build it.
+
+
+
+teh problem of not having defined functions
+good catch — a real gap, not just misrouting. You asked for the size of your current working directory, but Zedek answered with overall disk free/used space, which is a different question entirely. Two separate problems here:
+
+The capability doesn't actually exist — we have disk_usage_by_folder (lists the biggest subfolders within a root) and free_space_summary (total disk free/used), but nothing that answers "what's the total size of this specific directory." The classifier picked the closest available option, but the right function was simply missing.
+The confidence score was 0.403 — barely above our 0.35 threshold — yet got labeled "high." That's a real calibration problem. A borderline score like that shouldn't be treated as confident.

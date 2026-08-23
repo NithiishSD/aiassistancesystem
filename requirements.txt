@@ -9,8 +9,10 @@ groq==0.11.0
 chromadb==0.5.20
 
 # --- Zero-shot intent classification (Phase 6.5: replaces Llama for routing) ---
+# NOTE: torch must be installed separately as CPU-only to avoid requiring
+# CUDA/cuDNN (this classifier intentionally runs on CPU, not GPU):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 transformers==4.46.3
-torch==2.5.1
 
 # --- Orchestration / async ---
 python-dotenv==1.0.1

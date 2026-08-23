@@ -16,6 +16,7 @@ model does it more reliably.
 """
 
 import os
+import re
 os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip network check
 # (safe because the model is downloaded once on first successful run; if you ever
 # need to re-download or switch models, temporarily unset this or delete the cache)
@@ -63,12 +64,52 @@ CONFIDENCE_THRESHOLD = 0.45  # below this, treat as low confidence regardless of
 # comes in — it may need further tuning in either direction.
 
 
+def _is_acknowledgement_or_confirmation(text: str) -> bool:
+    """Treat short gratitude/acknowledgment phrases as neutral and non-correction."""
+    if text is None:
+        return False
+
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", text.lower()).strip()
+    if not cleaned:
+        return False
+
+    short_ack_phrases = {
+        "ok",
+        "okay",
+        "alright",
+        "thanks",
+        "thank you",
+        "thank u",
+        "ty",
+        "thx",
+        "got it",
+        "understood",
+        "sounds good",
+        "appreciate it",
+        "okay thank you",
+        "ok thank you",
+    }
+
+    if cleaned in short_ack_phrases:
+        return True
+
+    if any(phrase in cleaned for phrase in ["thank you", "thanks", "thank u", "thx", "ty", "got it", "understood", "appreciate it"]):
+        return True
+
+    # A brief acknowledgment should not be treated as a correction simply because it is short.
+    return len(cleaned.split()) <= 4 and any(word in cleaned for word in ["okay", "ok", "thanks", "thank", "got", "understood"])
+
+
 def classify_intent(text: str) -> dict:
     """
     Returns: {"function": str|None, "confidence": "high"|"low", "score": float}
     "function" is None for general_question; for remember_fact/unsupported it
     returns those exact strings so the orchestrator can branch on them same as before.
     """
+    if _is_acknowledgement_or_confirmation(text):
+        log.info("intent_classified_acknowledgement", extra={"text": text})
+        return {"function": None, "confidence": "high", "score": 0.0}
+
     clf = _get_classifier()
     label_keys = list(INTENT_LABELS.keys())
     candidate_descriptions = list(INTENT_LABELS.values())

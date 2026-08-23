@@ -79,6 +79,81 @@ def _add_to_session(role: str, content: str) -> None:
         log.info("session_buffer_full_flushing", extra={"turns": len(SESSION_HISTORY)})
         summarize_and_flush_session()
 
+def tone_for_prompt(user_input: str) -> str:
+    """Map user wording into a matching conversational tone."""
+    lowered = user_input.lower()
+    casual_markers = ["hey", "hi", "bro", "pls", "plz", "lol", "gonna", "wanna", "quick", "buddy", "yo"]
+    if any(marker in lowered for marker in casual_markers):
+        return "friendly, lightly playful, and casual"
+    return "warm, clear, and conversational"
+
+
+def should_treat_as_disambiguation(previous_input: str, current_input: str) -> bool:
+    """Detect when the user is correcting a previous ambiguous term like 'astro'."""
+    prev = (previous_input or "").lower()
+    curr = (current_input or "").lower()
+
+    if "astro" not in prev and "astro" not in curr:
+        return False
+
+    clarification_signals = ["i meant", "i mean", "no i am talking about", "not astronomy", "not astrology", "actually", "frontend framework", "framework"]
+    if any(signal in curr for signal in clarification_signals):
+        if "framework" in curr or "frontend" in curr or "astronomy" in prev or "astrology" in prev:
+            return True
+
+    if "astro" in prev and "astro" in curr and ("framework" in curr or "frontend" in curr):
+        return True
+
+    return False
+
+
+def should_ask_ambiguous_term_question(user_input: str, recent_user_turns: list[str] | None = None) -> bool:
+    """Ask for clarification when a short ambiguous term could mean two different things."""
+    text = (user_input or "").lower()
+    if "astro" not in text:
+        return False
+
+    if any(word in text for word in ["framework", "frontend", "astronomy", "astrology", "space", "stars"]):
+        return False
+
+    # If the user has already clarified earlier, don't keep asking the same question.
+    if recent_user_turns:
+        last = recent_user_turns[-1].lower()
+        if "framework" in last or "astronomy" in last or "astrology" in last:
+            return False
+
+    return True
+
+
+def generate_ambiguity_reply(user_input: str, previous_input: str | None = None) -> str:
+    """Produce a playful but clear clarification reply for ambiguous terms."""
+    tone = tone_for_prompt(user_input)
+    previous = (previous_input or "").lower()
+
+    if "frontend" in user_input.lower() or "framework" in user_input.lower() or "framework" in previous:
+        if "astronomy" in previous or "astrology" in previous:
+            return (
+                "Ahh, gotcha 😄 I thought you meant astronomy/astrology at first. "
+                "You meant Astro, the frontend framework — right? "
+                "Astro is a modern frontend framework built for fast, content-first websites with minimal JavaScript. "
+                "Do you want the quick explainer, a beginner example, or a React-vs-Astro comparison?"
+            )
+        return (
+            f"Gotcha 😄 You mean Astro, the frontend framework. {('Astro is a modern static-site and content-first framework designed for speed and minimal JS. ')} "
+            f"I can explain it in a fun, {tone} way — want the quick version or the deeper breakdown?"
+        )
+
+    if "astronomy" in previous or "astrology" in previous:
+        return (
+            "Ooh, I was thinking of astronomy/astrology there 😅. If you meant Astro the frontend framework, "
+            "I can explain that too — but if you meant astronomy, I can cover that as well. Which one should I unpack?"
+        )
+
+    return (
+        f"Hmm, 'astro' can mean a few different things 😅. Are you asking about astronomy, astrology, or Astro the frontend framework? "
+        f"Tell me the one you mean and I’ll give you a {tone} explanation."
+    )
+
 # NOTE: SYSTEM_PROMPT (the old classification prompt) has been removed —
 # classification is now handled by classifier.py (DeBERTa zero-shot model),
 # not Llama. See route_request() below.
@@ -93,6 +168,14 @@ def route_request(user_input: str) -> dict:
     generation are handled by different, purpose-built models.
     """
     log.info("routing_started", extra={"user_input": user_input})
+
+    normalized = (user_input or "").strip().lower()
+    if normalized in {"ok", "okay", "alright", "thanks", "thank you", "thank u", "ty", "thx", "got it", "understood", "sounds good", "appreciate it"} or any(phrase in normalized for phrase in ["thank you", "thanks", "thank u", "thx", "ty", "got it", "understood", "appreciate it"]) and len(normalized.split()) <= 6:
+        log.info("routing_acknowledgement_guard", extra={"user_input": user_input})
+        return {"function": None, "domain": classifier.classify_domain(user_input), "confidence": "high", "score": 0.0, "args": {}, "clarify": False}
+
+    if should_ask_ambiguous_term_question(user_input, [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]):
+        return {"function": None, "domain": classifier.classify_domain(user_input), "confidence": "high", "score": 0.0, "args": {}, "clarify": True}
 
     intent_result = classifier.classify_intent(user_input)
     domain = classifier.classify_domain(user_input)
@@ -394,6 +477,21 @@ def format_result(func_name: str, result) -> str:
 
 def handle(user_input: str) -> str:
     """Full pipeline: route -> validate -> execute -> answer -> store turn."""
+    recent_user_turns = [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]
+
+    if should_ask_ambiguous_term_question(user_input, recent_user_turns):
+        answer = generate_ambiguity_reply(user_input, recent_user_turns[-1] if recent_user_turns else None)
+        _add_to_session("user", user_input)
+        _add_to_session("assistant", answer)
+        return answer
+
+    previous_user_turn = recent_user_turns[-1] if recent_user_turns else ""
+    if should_treat_as_disambiguation(previous_user_turn, user_input):
+        answer = generate_ambiguity_reply(user_input, previous_user_turn)
+        _add_to_session("user", user_input)
+        _add_to_session("assistant", answer)
+        return answer
+
     decision = route_request(user_input)
     decision["_original_input"] = user_input
     domain = decision.get("domain", "personal")
