@@ -117,8 +117,10 @@ actively verifying behavior, not a one-shot build.
   read-only commands, and pass write/destructive commands to the normal tier
   gate; isolated destructive dry-runs are not implemented yet.
 - `llm_provider.py` — shared tiered provider chain: Gemini, Groq, NVIDIA NIM,
-  GitHub Models, Cerebras, and local Ollama fallback. It returns both the
-  generated answer and the provider source for transparency.
+  OpenRouter, Cerebras, and local Ollama fallback. It returns both the
+  generated answer and the provider source for transparency. Cloud use can be
+  disabled globally with `ALLOW_CLOUD=false`, or bypassed per call with
+  `force_local=True`; either route goes directly to local Ollama.
 - `memory.py` — ChromaDB wrapper. `store()`/`retrieve()`/`delete_by_ids()`.
   Domain-partitioned ("personal"/"academic"), user_id-tagged, content_type
   distinguishes "fact" vs "conversation".
@@ -236,6 +238,10 @@ actively verifying behavior, not a one-shot build.
   bubblewrap execution. Its generation loop now uses `llm_provider`, retries a
   failed generated patch once, and is dispatched by `coding_task`; live
   provider calls and repository patch application still need testing/building.
+- `llm_provider.py` supports global and per-call local-only operation. With
+  `ALLOW_CLOUD=false` or `force_local=True`, it skips all cloud providers and
+  uses local Ollama directly; normal operation uses the dynamic NVIDIA and
+  OpenRouter model resolvers with one-hour catalog caching.
 - Coding requests now receive a dedicated plan-only response from the
   orchestrator and require explicit approval before future patching work.
 - Detailed process analysis now returns memory, CPU, and running-time data for
