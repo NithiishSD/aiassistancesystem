@@ -30,6 +30,8 @@ FUNCTION_TIERS = {
     "top_memory_processes": 0,
     "free_space_summary": 0,
     "directory_size": 0,
+    "list_processes_detailed": 0,
+    "open_application": 1,
 }
 
 # --- Hard pattern escalation ---

@@ -6,13 +6,16 @@ The LLM never generates or executes raw shell strings. It can only call
 one of the fixed functions below, with validated arguments. This is the
 sandbox — not a subprocess wrapper, but a closed set of safe operations.
 
-All operations are:
-  - Read-only (no writes, no deletes)
+Most operations are:
+    - Read-only (no writes, no deletes); open_application is the controlled
+        exception and launches only an executable resolved through shutil.which.
   - Restricted to the user's home directory (no /etc, /root, system paths)
   - Logged via zedek_logger before returning results
 """
 
 import os
+import time
+from datetime import datetime
 import psutil
 from pathlib import Path
 from zedek_logger import get_logger
@@ -235,6 +238,46 @@ def current_datetime() -> dict:
     return result
 
 
+def list_processes_detailed(top_n: int = 50) -> list[dict]:
+    """Returns detailed data for currently running processes."""
+    log.info("list_processes_detailed_called", extra={})
+    procs = []
+    for p in psutil.process_iter(["pid", "name", "memory_info", "cpu_percent", "create_time"]):
+        try:
+            mem_mb = p.info["memory_info"].rss / (1024**2)
+            running_minutes = round((time.time() - p.info["create_time"]) / 60, 1)
+            procs.append({
+                "pid": p.info["pid"],
+                "name": p.info["name"],
+                "memory_mb": round(mem_mb, 1),
+                "cpu_percent": p.info["cpu_percent"],
+                "running_minutes": running_minutes,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    result = procs[:top_n]
+    log.info("list_processes_detailed_result", extra={"count": len(result)})
+    return result
+
+
+def open_application(app_name: str) -> dict:
+    """Launches an installed application resolved through the system PATH."""
+    import shutil
+    import subprocess
+
+    log.info("open_application_called", extra={"app_name": app_name})
+
+    resolved_path = shutil.which(app_name)
+    if not resolved_path:
+        log.info("open_application_not_found", extra={"app_name": app_name})
+        return {"launched": False, "reason": f"'{app_name}' is not a recognized installed application."}
+
+    subprocess.Popen([resolved_path], start_new_session=True)
+    log.info("open_application_launched", extra={"app_name": app_name, "resolved_path": resolved_path})
+    return {"launched": True, "app": app_name, "path": resolved_path}
+
+
 def free_space_summary() -> dict:
     """Returns overall disk free/used space for the home partition."""
     log.info("free_space_called", extra={})
@@ -255,6 +298,8 @@ AVAILABLE_FUNCTIONS = {
     "top_memory_processes": top_memory_processes,
     "free_space_summary": free_space_summary,
     "directory_size": directory_size,
+    "list_processes_detailed": list_processes_detailed,
+    "open_application": open_application,
 }
 
 

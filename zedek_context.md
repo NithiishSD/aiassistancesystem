@@ -107,8 +107,8 @@ actively verifying behavior, not a one-shot build.
 
 - `zedek_logger.py` — structured JSON logging, every module uses this.
   `get_logger(module_name)` writes to `logs/<module_name>.log` AND console.
-- `system_agent.py` — sandboxed, read-only system functions: search_files,
-  disk_usage_by_folder, top_memory_processes, free_space_summary. Hard
+- `system_agent.py` — sandboxed system functions: read-only filesystem and
+  process inspection plus controlled application launching. Hard
   home-directory restriction via `_validate_path()`.
 - `tier_gate.py` — rule-based risk classification (0-3) with hardcoded
   escalation patterns. Tier 3 execution disabled by design (see above).
@@ -117,12 +117,16 @@ actively verifying behavior, not a one-shot build.
   distinguishes "fact" vs "conversation".
 - `classifier.py` — DeBERTa-v3 zero-shot intent + domain classifier, CPU-only.
   Categories: search_files, disk_usage_by_folder, top_memory_processes,
-  free_space_summary, remember_fact, correct_fact, coding_task, unsupported,
-  general_question.
+  free_space_summary, list_processes_detailed, open_application, remember_fact,
+  correct_fact, coding_task, unsupported, general_question.
 - `orchestrator.py` — the main pipeline. Routes via classifier.py, extracts
   args via a narrow Llama call, runs through tier_gate, executes or answers,
   manages SESSION_HISTORY and memory flush. This is the file most actively
-  under development.
+  under development. It also owns the ambiguity and tone helpers, including
+  `should_treat_as_disambiguation()`,
+  `should_ask_ambiguous_term_question()`, `generate_ambiguity_reply()`, and
+  `tone_for_prompt()`. Nuanced process questions are answered by
+  `_reason_over_process_data()` using the collected process data only.
 - `coding_agent.py` — narrow coding specialist and verifier workflow following
   plan -> patch -> test -> verify, with bounded Python execution through
   bubblewrap. Provider-backed generation and repository patching are not wired
@@ -225,6 +229,9 @@ actively verifying behavior, not a one-shot build.
   yet.
 - Coding requests now receive a dedicated plan-only response from the
   orchestrator and require explicit approval before future patching work.
+- Detailed process analysis now returns memory, CPU, and running-time data for
+  Llama to interpret, while `open_application` launches PATH-resolved apps as
+  a Tier 1 reversible action.
 - Sandboxed Python execution exists through bubblewrap; broader repository
   mutation and test execution remain deliberately restricted.
 - No evaluator/verifier agent yet.

@@ -449,10 +449,29 @@ def execute(decision: dict) -> str:
     try:
         result = AVAILABLE_FUNCTIONS[func_name](**args)
         log.info("execution_success", extra={"function": func_name, "call_args": args})
+
+        if func_name == "list_processes_detailed":
+            return _reason_over_process_data(result, original_input)
+
         return format_result(func_name, result)
     except Exception as e:
         log.info("execution_error", extra={"function": func_name, "call_args": args, "error": str(e)})
         return f"Error running {func_name}: {e}"
+
+
+def _reason_over_process_data(process_data: list[dict], user_question: str) -> str:
+    """Answer a process-analysis question using only the collected process data."""
+    prompt = f"""Here is data on currently running processes:
+{json.dumps(process_data, indent=2)}
+
+The user asked: "{user_question}"
+
+Answer their question using ONLY the data above. Do not invent process names,
+memory values, or running times not present in the data. If the data doesn't
+contain enough information to answer, say so plainly."""
+
+    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
+    return response["message"]["content"]
 
 
 def _coerce_arg_types(func_name: str, args: dict) -> dict:
@@ -463,6 +482,7 @@ def _coerce_arg_types(func_name: str, args: dict) -> dict:
     int_args = {
         "top_memory_processes": ["top_n"],
         "disk_usage_by_folder": ["top_n"],
+        "list_processes_detailed": ["top_n"],
     }
     for key in int_args.get(func_name, []):
         if key in args:
@@ -489,6 +509,10 @@ def format_result(func_name: str, result) -> str:
         if not result:
             return "No matching files found."
         return f"Found {len(result)} file(s):\n" + "\n".join(result[:20])
+    if func_name == "open_application":
+        if result["launched"]:
+            return f"Opened {result['app']}."
+        return result["reason"]
     return str(result)
 
 

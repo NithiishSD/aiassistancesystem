@@ -50,7 +50,9 @@ INTENT_LABELS = {
     "remember_fact": "the user stating or declaring a new fact about themselves",
     "correct_fact": "the user correcting, retracting, or saying something previously stated is now false or outdated",
     "coding_task": "a request to inspect, explain, fix, or write software code",
-    "unsupported": "a request for the assistant to perform an action like booking, sending, playing media, or writing code",
+    "unsupported": "a request for the assistant to perform an action like booking, sending, or playing media that is outside the supported capabilities",
+    "list_processes_detailed": "a request to analyze, compare, or ask a nuanced question about running processes or applications (e.g. resource usage patterns, not just a simple top-N ranking)",
+    "open_application": "a request to open, launch, or start an application",
     "general_question": "a general question, or a conversational message that is not a command",
 }
 
