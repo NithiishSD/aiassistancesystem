@@ -12,11 +12,14 @@ orchestrator and the existing tier gate.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 from typing import Any
+
+import llm_provider
 
 
 class CodingSpecialist:
@@ -29,27 +32,30 @@ class CodingSpecialist:
 
     def __init__(self, model_name: str = "local-safety-specialist") -> None:
         self.model_name = model_name
+        self._verifier = Verifier()
+        self._runner = SandboxedPythonRunner()
 
     def plan_task(self, user_request: str) -> dict[str, Any]:
-        """Return a concrete task plan that matches the project's roadmap."""
-        goal = (user_request or "Complete the requested code task").strip() or "Complete the requested code task"
+        """Generate a concrete plan for the specific coding request."""
+        request = (user_request or "Complete the requested code task").strip()
+        prompt = f"""Create a concise implementation plan for this coding request:
+{request}
 
-        steps = [
-            "Read the relevant files and identify the exact root cause or missing feature.",
-            "Create the smallest safe patch that addresses the request without broad rewrites.",
-            "Add or run focused tests for the changed behavior.",
-            "Review the result, fix any failing checks, and verify the final outcome.",
-        ]
-
-        if any(keyword in goal.lower() for keyword in ["bug", "fix", "error", "broken", "fail"]):
-            steps[0] = "Trace the bug to the exact function or file before changing code."
-
-        if any(keyword in goal.lower() for keyword in ["test", "unit", "pytest", "validate", "verify"]):
-            steps[2] = "Write or update a focused test that captures the behavior to be validated."
+Return ONLY valid JSON with this shape:
+{{"goal": "...", "steps": ["..."], "files": ["..."], "tests": ["..."]}}
+The plan must be specific to the request, keep changes minimal, and include
+verification steps. Do not include markdown."""
+        result = llm_provider.generate_chat([{"role": "user", "content": prompt}], json_mode=True)
+        try:
+            plan = json.loads(result["answer"])
+        except (json.JSONDecodeError, TypeError):
+            plan = {}
 
         return {
-            "goal": goal,
-            "steps": steps,
+            "goal": plan.get("goal", request),
+            "steps": plan.get("steps", ["Inspect the relevant code.", "Implement the smallest safe change.", "Verify the result."]),
+            "files": plan.get("files", []),
+            "tests": plan.get("tests", []),
             "constraints": [
                 "Keep the change narrow and reviewable.",
                 "Do not execute arbitrary shell commands from model-generated text.",
@@ -59,17 +65,46 @@ class CodingSpecialist:
             "model": self.model_name,
         }
 
-    def patch(self, request: str, current_code: str = "") -> str:
-        """A lightweight stub for future code patch generation.
+    def patch(self, request: str, current_code: str = "", plan: dict[str, Any] | None = None, error: str = "") -> str:
+        """Generate a Python code patch using the request and plan as context."""
+        prompt = f"""Implement this coding request:
+{request}
 
-        This keeps the agent architecture explicit while remaining compatible with
-        the current, safety-first system, which does not allow direct shell-based
-        execution from the model.
-        """
-        if not current_code.strip():
-            return f"No existing code was provided for: {request}"
-        return f"Planned patch for: {request}\n\nReview the current implementation and apply the minimal change in the affected file(s)."
+Plan:
+{json.dumps(plan or {}, indent=2)}
 
+Current code:
+{current_code}
+
+Previous verification error, if any:
+{error or '(none)'}
+
+Return ONLY the complete Python code that should be verified. Do not use
+markdown fences, explanations, shell commands, or code for unrelated files."""
+        result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+        code = result["answer"].strip()
+        if code.startswith("```"):
+            lines = code.splitlines()
+            code = "\n".join(lines[1:-1]).strip()
+        return code
+
+    def implement_and_verify(self, request: str, current_code: str = "", max_retries: int = 1) -> dict[str, Any]:
+        """Generate code, verify syntax, run it in the sandbox, and retry on failure."""
+        plan = self.plan_task(request)
+        error = ""
+        attempts = max_retries + 1
+        for attempt in range(1, attempts + 1):
+            code = self.patch(request, current_code, plan=plan, error=error)
+            if not self._verifier.verify_python(code):
+                error = "Generated code failed Python syntax verification."
+                continue
+
+            execution = self._runner.run(code)
+            if execution["status"] in {"passed", "unavailable"}:
+                return {"status": "passed" if execution["status"] == "passed" else "unverified", "attempts": attempt, "plan": plan, "code": code, "execution": execution}
+            error = f"Sandbox execution failed: {execution.get('stderr', '')}"
+
+        return {"status": "failed", "attempts": attempts, "plan": plan, "code": code, "error": error, "execution": execution if 'execution' in locals() else None}
 
 class Verifier:
     """Second-pass validation for generated Python code and patches."""

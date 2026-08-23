@@ -413,6 +413,14 @@ def execute(decision: dict) -> str:
     confidence = decision.get("confidence", "high")
     original_input = decision.get("_original_input", "")
 
+    if func_name == "coding_task":
+        result = CODING_SPECIALIST.implement_and_verify(original_input)
+        log.info("coding_task_verified", extra={
+            "status": result["status"],
+            "attempts": result["attempts"],
+        })
+        return format_coding_result(result)
+
     # Low-confidence routing to anything other than a plain question is
     # exactly the failure mode that caused the search_files/remember_fact
     # misroutes — don't commit to an action the router itself is unsure about.
@@ -438,11 +446,6 @@ def execute(decision: dict) -> str:
 
     if func_name == "correct_fact":
         return _handle_correction(decision.get("_original_input", ""), domain)
-
-    if func_name == "coding_task":
-        plan = CODING_SPECIALIST.plan_task(original_input)
-        log.info("coding_plan_created", extra={"user_input": original_input, "steps": len(plan["steps"])})
-        return format_coding_plan(plan)
 
     if func_name == "unsupported":
         reason = decision.get("reason", "this request")
@@ -499,6 +502,19 @@ contain enough information to answer, say so plainly."""
 
     result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
     return result["answer"]
+
+
+def format_coding_result(result: dict) -> str:
+    """Present coding verification without claiming that repository files changed."""
+    status = result["status"]
+    if status == "passed":
+        execution = result["execution"]
+        output = execution.get("stdout", "").strip()
+        output_note = f"\nSandbox output:\n{output}" if output else ""
+        return f"Generated code passed syntax and sandbox verification after {result['attempts']} attempt(s). No files were changed.{output_note}"
+    if status == "unverified":
+        return f"Generated code passed syntax checks, but sandbox verification was unavailable. No files were changed.\nReason: {result['execution'].get('stderr', '')}"
+    return f"Generated code could not be verified after {result['attempts']} attempt(s). No files were changed.\nReason: {result.get('error', 'unknown verification failure')}"
 
 
 def _coerce_arg_types(func_name: str, args: dict) -> dict:

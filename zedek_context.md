@@ -136,8 +136,9 @@ actively verifying behavior, not a one-shot build.
   `_reason_over_process_data()` using the collected process data only.
 - `coding_agent.py` — narrow coding specialist and verifier workflow following
   plan -> patch -> test -> verify, with bounded Python execution through
-  bubblewrap. Provider-backed coding generation and repository patching are not
-  wired into this scaffold yet.
+  bubblewrap. It now generates request-specific plans and Python patches through
+  `llm_provider`, retries failed syntax or sandbox verification once, and does
+  not yet write generated patches back to repository files.
 - `.env.example` — template for API keys (Gemini, Groq, NVIDIA, GitHub
   Models, Cerebras). Real `.env` is gitignored, never commit it.
 - `cleanup_garbage_facts.py` — one-time script, already used to clean up
@@ -231,10 +232,10 @@ actively verifying behavior, not a one-shot build.
 - The recent ambiguity/tone pass is complete and verified: short gratitude
   phrases like "okay thank you" no longer trigger `correct_fact`, and the
   literal "astro" clarification flow now resolves the meaning before answering.
-- `coding_agent.py` has focused tests for planning, Python syntax verification,
-  and bubblewrap execution. Shared provider-backed generation is wired into
-  orchestrator high-value paths; live provider calls still need testing with
-  configured API keys.
+- `coding_agent.py` has focused verification coverage for Python syntax and
+  bubblewrap execution. Its generation loop now uses `llm_provider`, retries a
+  failed generated patch once, and is dispatched by `coding_task`; live
+  provider calls and repository patch application still need testing/building.
 - Coding requests now receive a dedicated plan-only response from the
   orchestrator and require explicit approval before future patching work.
 - Detailed process analysis now returns memory, CPU, and running-time data for
