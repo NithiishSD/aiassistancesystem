@@ -21,6 +21,14 @@ The user (Nithiish) is building this personally and reviewing/testing every
 change themselves — treat this as a real, evolving system with a human
 actively verifying behavior, not a one-shot build.
 
+## Project documentation rule
+
+Every code, configuration, test, or architecture change made in this project
+must also be recorded in this file. Update the relevant inventory, testing
+status, known issues, completed work, or next-steps section in the same change
+so project context stays current without requiring the user to repeat this
+instruction.
+
 ## Hardware / environment constraints
 
 - Laptop GPU: RTX 4050, **6GB VRAM only** — tight. Local LLMs (Qwen2.5-Coder-7B,
@@ -240,6 +248,10 @@ actively verifying behavior, not a one-shot build.
   bubblewrap execution. Its generation loop now uses `llm_provider`, retries a
   failed generated patch once, and is dispatched by `coding_task`; live
   provider calls and repository patch application still need testing/building.
+- Bubblewrap namespace/resource setup errors are now reported as sandbox
+  unavailability rather than generated-code failures, so infrastructure
+  failures do not trigger a pointless second generation attempt. A harmless
+  sandbox run was re-tested successfully after this change.
 - `llm_provider.py` supports task-aware provider ordering and global/per-call
   local-only operation. Coding messages currently pass unchanged through a
   placeholder boundary reserved for the future LLM-based security scanner.

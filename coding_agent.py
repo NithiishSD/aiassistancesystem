@@ -214,7 +214,16 @@ class SandboxedPythonRunner:
                 return {"status": "unavailable", "returncode": None, "stdout": "", "stderr": str(error)}
 
         return {
-            "status": "passed" if completed.returncode == 0 else "failed",
+            "status": (
+                "passed"
+                if completed.returncode == 0
+                else (
+                    "unavailable"
+                    if "Creating new namespace failed" in completed.stderr
+                    or "Resource temporarily unavailable" in completed.stderr
+                    else "failed"
+                )
+            ),
             "returncode": completed.returncode,
             "stdout": completed.stdout[: self.max_output_bytes],
             "stderr": completed.stderr[: self.max_output_bytes],
