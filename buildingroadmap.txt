@@ -1,5 +1,5 @@
 Phase 1 — Environment
-Conda environment (jarvis-env), Ollama running two local models — Qwen2.5-Coder-7B and Llama3.1-8B — confirmed responding, GPU/VRAM visibility confirmed via pynvml.
+Conda environment (`zedek-env`), Ollama running two local models — Qwen2.5-Coder-7B and Llama3.1-8B — confirmed responding, GPU/VRAM visibility confirmed via pynvml.
 2
 Phase 2 — Logging
 Structured JSON logging (zedek_logger.py) — every module writes timestamped, parseable log lines to its own file under logs/. Confirmed working across all modules.
@@ -71,3 +71,8 @@ good catch — a real gap, not just misrouting. You asked for the size of your c
 
 The capability doesn't actually exist — we have disk_usage_by_folder (lists the biggest subfolders within a root) and free_space_summary (total disk free/used), but nothing that answers "what's the total size of this specific directory." The classifier picked the closest available option, but the right function was simply missing.
 The confidence score was 0.403 — barely above our 0.35 threshold — yet got labeled "high." That's a real calibration problem. A borderline score like that shouldn't be treated as confident.
+
+Next milestone: coding specialist + verifier scaffold
+`coding_agent.py` now provides a narrow plan -> patch -> test -> verify workflow
+and Python syntax verification. Provider-backed generation and real sandboxed
+execution remain separate follow-up milestones.

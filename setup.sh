@@ -26,7 +26,7 @@ echo "Pulling Llama3.1-8B (routing / general reasoning)..."
 ollama pull llama3.1:8b
 
 # 4. Create Conda environment
-echo "Creating Conda environment 'zerdek-env' (Python 3.12)..."
+echo "Using Conda environment 'zedek-env' (Python 3.12)..."
 if ! command -v conda &> /dev/null; then
     echo "[ERROR] conda not found in PATH. Activate your conda installation first (e.g. 'source ~/miniconda3/etc/profile.d/conda.sh') and re-run."
     exit 1
@@ -35,7 +35,9 @@ fi
 # Needed so 'conda activate' works inside a non-interactive script shell
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
-conda create --prefix zedek-env python=3.12
+if ! conda env list | grep -q "${PWD}/zedek-env"; then
+    conda create --prefix zedek-env python=3.12
+fi
 conda activate zedek-env
 
 # 5. Install Python dependencies
@@ -45,5 +47,5 @@ pip install -r requirements.txt
 
 echo ""
 echo "=== Setup complete ==="
-echo "Activate the environment with: conda activate jarvis-env"
+echo "Activate the environment with: conda activate ./zedek-env"
 echo "Then run: python test_setup.py"

@@ -27,8 +27,7 @@ actively verifying behavior, not a one-shot build.
   Llama3.1-8B, both Q4_K_M quantized, ~4.5GB each) are meant to run
   **sequentially, not concurrently**. The classifier (DeBERTa) deliberately
   runs on CPU (`device=-1`) specifically to avoid competing for this VRAM.
-- Linux (Ubuntu-based), conda environment named `jarvis-env` (historical name;
-  project itself is called "Zedek" — the env name just wasn't renamed).
+- Linux (Ubuntu-based), Conda environment named `zedek-env`.
 - 100GB total disk, not a constraint — storage was explicitly ruled out as a
   concern early on; don't over-optimize for disk space.
 - `torch` MUST be installed CPU-only (`pip install torch --index-url
@@ -123,9 +122,9 @@ actively verifying behavior, not a one-shot build.
   args via a narrow Llama call, runs through tier_gate, executes or answers,
   manages SESSION_HISTORY and memory flush. This is the file most actively
   under development.
-- `coding_agent.py` — tiered cloud-to-local fallback for code generation
-  (NOT execution — no sandboxed code execution exists yet, this is a known
-  gap, see Next Steps).
+- `coding_agent.py` — narrow coding specialist and verifier scaffold following
+  plan -> patch -> test -> verify (NOT execution — no sandboxed code execution
+  exists yet, and provider-backed generation is not wired into this scaffold).
 - `.env.example` — template for API keys (Gemini, Groq, NVIDIA, GitHub
   Models, Cerebras). Real `.env` is gitignored, never commit it.
 - `cleanup_garbage_facts.py` — one-time script, already used to clean up
@@ -219,7 +218,8 @@ actively verifying behavior, not a one-shot build.
 - The recent ambiguity/tone pass is complete and verified: short gratitude
   phrases like "okay thank you" no longer trigger `correct_fact`, and the
   literal "astro" clarification flow now resolves the meaning before answering.
-- `coding_agent.py` is built but not yet tested end-to-end with real API keys.
+- `coding_agent.py` has focused tests for planning and Python syntax
+  verification; provider-backed generation is not wired or tested yet.
 - No sandboxed code EXECUTION exists yet — only code generation.
 - No evaluator/verifier agent yet.
 - No watchdog, no security module, no wake-word listener, no remaining
@@ -243,30 +243,54 @@ actively verifying behavior, not a one-shot build.
 ## Next steps (in the order previously agreed, now continuing from the current state)
 
 1. **Test coding_agent.py end-to-end** with real free-tier API keys.
-2. **Sandboxed code EXECUTION** for the coding agent (running generated
+2. **Coding specialist + verifier loop (OpenHands / SWE-agent pattern)** —
+   add a dedicated coding sub-agent that follows a plan → patch → test → verify
+   loop, rather than trying to do everything in one step. This is a proven
+   architecture pattern for code-heavy tasks and is especially useful for
+   repo changes, bug fixing, and validation workflows.
+3. **Sandboxed code EXECUTION** for the coding agent (running generated
    code/tests) — this needs REAL sandboxing (container or tightly
    restricted subprocess), unlike system_agent.py's lightweight function
    allowlist, because arbitrary generated code is a fundamentally larger
    risk surface. This was explicitly flagged as needed before the coding
    agent does anything beyond generation.
-3. **Evaluator/verifier agent** — separate from the task agent and the
+4. **Evaluator/verifier agent** — separate from the task agent and the
    watchdog, ideally using a different model than whichever one performed
    the task, to catch hallucinated/wrong content (see known issue #3 above,
-   still unresolved).
-4. **Remaining specialist agents**: research/RAG agent, web/browser agent.
-5. **Watchdog module** — separate process, observes agent actions against
+   still unresolved). This should review patch correctness, test results,
+   and whether the agent stayed within the user's actual intent.
+5. **Task planner / decomposer agent (optional but useful)** — a lightweight
+   planning pass that breaks a large request into concrete sub-tasks and
+   dependency order before execution. This can be implemented as a small,
+   specialized planner rather than a full multi-agent company model.
+6. **Remaining specialist agents**: research/RAG agent, web/browser agent.
+7. **Watchdog module** — separate process, observes agent actions against
    stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
    scaffolded in design but Tier 3 execution is currently OFF, so this
    isn't urgent yet.
-6. **Security module** — confirmation word + rotation, voice-print
+8. **Security module** — confirmation word + rotation, voice-print
    verification (in scope per user, not deferred), separate voice listener,
    password-gated UI panel, isolated encrypted local storage. Not started.
-7. **Wake-word general Q&A mode** — always-on lightweight listener, separate
+9. **Wake-word general Q&A mode** — always-on lightweight listener, separate
    from the security module's voice channel.
-8. **Academic/placement-prep tracking** — the actual "personal tutor" use
-   case (DSA/aptitude practice tracking, weak-topic identification) hasn't
-   been built yet; this was identified as the real differentiator the user
-   wants but is still just a stated goal, not implemented.
+10. **Academic/placement-prep tracking** — the actual "personal tutor" use
+    case (DSA/aptitude practice tracking, weak-topic identification) hasn't
+    been built yet; this was identified as the real differentiator the user
+    wants but is still just a stated goal, not implemented.
+
+### Architecture guidance to keep in the system design
+
+- Use the OpenHands / SWE-agent pattern as a blueprint for the coding layer:
+  plan → read context → patch → run tests → fix failures → verify.
+- Keep the current personal-assistant architecture as the top-level orchestrator;
+  do not replace it with a fully autonomous coding bot.
+- Keep the safety and tier gate in front of all execution steps, even for the
+  specialist coding agent.
+- Treat the verifier as non-optional: any code-generation path should have a
+  second pass that checks correctness, not just output style.
+- Keep the multi-agent decomposition lightweight and explicit; a full social
+  "company-of-agents" structure is not required for this project's current
+  goals and would increase complexity faster than value.
 
 > Important: the ambiguity-handling, gratitude guard, and tone adaptation pass
 > is complete and should be treated as finished work. Do not reopen or repeat
