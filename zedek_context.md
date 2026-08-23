@@ -112,6 +112,13 @@ actively verifying behavior, not a one-shot build.
   home-directory restriction via `_validate_path()`.
 - `tier_gate.py` — rule-based risk classification (0-3) with hardcoded
   escalation patterns. Tier 3 execution disabled by design (see above).
+- `command_verifier.py` — extra verifier for dynamically generated coding-agent
+  commands. Static checks block Tier 3 patterns, safely execute recognized
+  read-only commands, and pass write/destructive commands to the normal tier
+  gate; isolated destructive dry-runs are not implemented yet.
+- `llm_provider.py` — shared tiered provider chain: Gemini, Groq, NVIDIA NIM,
+  GitHub Models, Cerebras, and local Ollama fallback. It returns both the
+  generated answer and the provider source for transparency.
 - `memory.py` — ChromaDB wrapper. `store()`/`retrieve()`/`delete_by_ids()`.
   Domain-partitioned ("personal"/"academic"), user_id-tagged, content_type
   distinguishes "fact" vs "conversation".
@@ -129,8 +136,8 @@ actively verifying behavior, not a one-shot build.
   `_reason_over_process_data()` using the collected process data only.
 - `coding_agent.py` — narrow coding specialist and verifier workflow following
   plan -> patch -> test -> verify, with bounded Python execution through
-  bubblewrap. Provider-backed generation and repository patching are not wired
-  into this scaffold yet.
+  bubblewrap. Provider-backed coding generation and repository patching are not
+  wired into this scaffold yet.
 - `.env.example` — template for API keys (Gemini, Groq, NVIDIA, GitHub
   Models, Cerebras). Real `.env` is gitignored, never commit it.
 - `cleanup_garbage_facts.py` — one-time script, already used to clean up
@@ -225,13 +232,17 @@ actively verifying behavior, not a one-shot build.
   phrases like "okay thank you" no longer trigger `correct_fact`, and the
   literal "astro" clarification flow now resolves the meaning before answering.
 - `coding_agent.py` has focused tests for planning, Python syntax verification,
-  and bubblewrap execution. Provider-backed generation is not wired or tested
-  yet.
+  and bubblewrap execution. Shared provider-backed generation is wired into
+  orchestrator high-value paths; live provider calls still need testing with
+  configured API keys.
 - Coding requests now receive a dedicated plan-only response from the
   orchestrator and require explicit approval before future patching work.
 - Detailed process analysis now returns memory, CPU, and running-time data for
   Llama to interpret, while `open_application` launches PATH-resolved apps as
   a Tier 1 reversible action.
+- Dynamic coding commands now have an additional `command_verifier.py` layer
+  before tier-gate handling. Read-only commands use `shell=False`; destructive
+  dry-run isolation remains a planned follow-up.
 - General-question answering now identifies whether the latest user message
   answers Zedek's previous question or starts a new topic, and keeps the
   assistant's identity separate from stored user facts to reduce blended or

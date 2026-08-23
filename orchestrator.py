@@ -20,6 +20,7 @@ from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import gate
 import memory
 import classifier
+import llm_provider
 from coding_agent import CodingSpecialist
 
 log = get_logger("orchestrator")
@@ -247,9 +248,9 @@ Which numbered fact (if any) does this correction contradict/replace? Respond wi
 a JSON object: {{"index": <number or null>, "corrected_fact": "User's <attribute>: <new value>" or null}}
 If none of the candidates are actually related to this correction, use null for both fields."""
 
-    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}], format="json")
+    llm_result = llm_provider.generate_chat([{"role": "user", "content": prompt}], json_mode=True)
     try:
-        result = json.loads(response["message"]["content"])
+        result = json.loads(llm_result["answer"])
     except json.JSONDecodeError:
         result = {"index": None, "corrected_fact": None}
 
@@ -279,8 +280,8 @@ Write a brief (1-2 sentence), warm, natural acknowledgment. You may ask a short,
 relevant follow-up question if it fits naturally. Do NOT invent or assume any
 details the user didn't actually say — only react to what's explicitly stated."""
 
-    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
-    return response["message"]["content"].strip()
+    result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+    return result["answer"].strip()
 
 
 def canonicalize_fact(raw_text: str) -> str | None:
@@ -312,11 +313,8 @@ Statement: {raw_text}
 
 Respond with ONLY the standardized fact, or NO_FACT, nothing else."""
 
-    response = ollama.chat(
-        model=ROUTING_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    canonical = response["message"]["content"].strip()
+    result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+    canonical = result["answer"].strip()
     canonical = canonical.strip('"').strip("'")  # strip stray wrapping quotes the model sometimes adds
 
     # Guard: reject placeholder/empty extractions even if the model didn't
@@ -386,9 +384,11 @@ Answer the user's latest message concisely, using the conversation so far as con
     messages.extend(SESSION_HISTORY)
     messages.append({"role": "user", "content": user_input})
 
-    response = ollama.chat(model=ROUTING_MODEL, messages=messages)
-    answer = response["message"]["content"]
-    log.info("general_qa_answered", extra={"facts_used": len(relevant_facts), "session_turns_used": len(SESSION_HISTORY)})
+    result = llm_provider.generate_chat(messages)
+    answer = result["answer"]
+    log.info("general_qa_answered", extra={"facts_used": len(relevant_facts),
+                                             "session_turns_used": len(SESSION_HISTORY),
+                                             "source": result["source"]})
     return answer
 
 
@@ -497,8 +497,8 @@ Answer their question using ONLY the data above. Do not invent process names,
 memory values, or running times not present in the data. If the data doesn't
 contain enough information to answer, say so plainly."""
 
-    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
-    return response["message"]["content"]
+    result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+    return result["answer"]
 
 
 def _coerce_arg_types(func_name: str, args: dict) -> dict:

@@ -261,12 +261,16 @@ def list_processes_detailed(top_n: int = 50) -> list[dict]:
     return result
 
 
-def open_application(app_name: str) -> dict:
+def open_application(app_name: str = "") -> dict:
     """Launches an installed application resolved through the system PATH."""
     import shutil
     import subprocess
 
+    app_name = (app_name or "").strip()
     log.info("open_application_called", extra={"app_name": app_name})
+
+    if not app_name:
+        return {"launched": False, "reason": "Please specify which application to open."}
 
     resolved_path = shutil.which(app_name)
     if not resolved_path:
