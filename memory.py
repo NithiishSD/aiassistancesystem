@@ -82,12 +82,20 @@ def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_I
     items = []
     docs = results.get("documents", [[]])[0]
     metas = results.get("metadatas", [[]])[0]
-    for doc, meta in zip(docs, metas):
-        items.append({"text": doc, "metadata": meta})
+    ids = results.get("ids", [[]])[0]
+    for doc, meta, item_id in zip(docs, metas, ids):
+        items.append({"text": doc, "metadata": meta, "id": item_id})
 
     log.info("memory_retrieved", extra={"domain": domain, "user_id": user_id,
                                           "query": query, "results_found": len(items)})
     return items
+
+
+def delete_by_ids(ids: list[str], domain: str = "personal") -> None:
+    """Deletes specific stored items by their IDs. Used for fact corrections."""
+    collection = _get_collection(domain)
+    collection.delete(ids=ids)
+    log.info("memory_deleted", extra={"domain": domain, "ids": ids})
 
 
 if __name__ == "__main__":

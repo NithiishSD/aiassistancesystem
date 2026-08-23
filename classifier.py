@@ -15,6 +15,11 @@ This narrowing of responsibility is the point: each model does less, so each
 model does it more reliably.
 """
 
+import os
+os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip network check
+# (safe because the model is downloaded once on first successful run; if you ever
+# need to re-download or switch models, temporarily unset this or delete the cache)
+
 from transformers import pipeline
 from zedek_logger import get_logger
 
@@ -40,7 +45,9 @@ INTENT_LABELS = {
     "disk_usage_by_folder": "a request to check which folders are using the most disk space",
     "top_memory_processes": "a request to check which processes are using the most memory or RAM",
     "free_space_summary": "a request to check how much free disk space is available",
-    "remember_fact": "the user stating or declaring a fact about themselves",
+    "directory_size": "a request to check the total size of a specific folder or the current working directory",
+    "remember_fact": "the user stating or declaring a new fact about themselves",
+    "correct_fact": "the user correcting, retracting, or saying something previously stated is now false or outdated",
     "unsupported": "a request for the assistant to perform an action like booking, sending, playing media, or writing code",
     "general_question": "a general question, or a conversational message that is not a command",
 }
@@ -50,7 +57,10 @@ DOMAIN_LABELS = {
     "academic": "about the user's studies or academics",
 }
 
-CONFIDENCE_THRESHOLD = 0.35  # below this, treat as low confidence regardless of top label
+CONFIDENCE_THRESHOLD = 0.45  # below this, treat as low confidence regardless of top label
+# NOTE: raised from 0.35 after observing a real misfire at score=0.403 that was
+# incorrectly treated as "high" confidence. Revisit this value as more test data
+# comes in — it may need further tuning in either direction.
 
 
 def classify_intent(text: str) -> dict:

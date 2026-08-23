@@ -138,6 +138,66 @@ Request: {user_input}"""
         return {}
 
 
+def _handle_correction(raw_text: str, domain: str) -> str:
+    """
+    Handles a fact correction/retraction. Finds the most likely stored fact
+    this contradicts, deletes it, stores the corrected version instead of
+    just adding a new fact on top of the stale one.
+    """
+    candidates = memory.retrieve(raw_text, domain=domain, content_type="fact", top_k=3)
+
+    if not candidates:
+        log.info("correction_no_matching_fact", extra={"raw_text": raw_text})
+        return "I don't have a stored fact that matches what you're correcting — nothing to update."
+
+    candidate_list = "\n".join(f"{i}: {c['text']}" for i, c in enumerate(candidates))
+    prompt = f"""The user is correcting previously stored information. Here are the
+candidate stored facts that might be what they're correcting:
+
+{candidate_list}
+
+The user's correction: "{raw_text}"
+
+Which numbered fact (if any) does this correction contradict/replace? Respond with ONLY
+a JSON object: {{"index": <number or null>, "corrected_fact": "User's <attribute>: <new value>" or null}}
+If none of the candidates are actually related to this correction, use null for both fields."""
+
+    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}], format="json")
+    try:
+        result = json.loads(response["message"]["content"])
+    except json.JSONDecodeError:
+        result = {"index": None, "corrected_fact": None}
+
+    index = result.get("index")
+    corrected_fact = result.get("corrected_fact")
+
+    if index is None or corrected_fact is None:
+        log.info("correction_no_confident_match", extra={"raw_text": raw_text, "candidates": candidate_list})
+        return "I see you're correcting something, but I couldn't confidently match it to a stored fact — could you be more specific?"
+
+    old_fact = candidates[index]
+    memory.delete_by_ids([old_fact["id"]], domain=domain)
+    memory.store(corrected_fact, domain=domain, content_type="fact")
+    log.info("fact_corrected", extra={"old_fact": old_fact["text"], "new_fact": corrected_fact})
+    return f"Got it — I've updated that. (Was: \"{old_fact['text']}\")"
+
+
+def _acknowledge_fact(raw_text: str) -> str:
+    """
+    Generates a brief, natural acknowledgment of what the user just said,
+    instead of a flat canned response. Strictly grounded in only what the
+    user actually stated — never invents unstated details about them.
+    """
+    prompt = f"""The user just told you this about themselves: "{raw_text}"
+
+Write a brief (1-2 sentence), warm, natural acknowledgment. You may ask a short,
+relevant follow-up question if it fits naturally. Do NOT invent or assume any
+details the user didn't actually say — only react to what's explicitly stated."""
+
+    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
+    return response["message"]["content"].strip()
+
+
 def canonicalize_fact(raw_text: str) -> str | None:
     """
     Rewrites a raw user statement into a clean, standardized fact before
@@ -172,6 +232,7 @@ Respond with ONLY the standardized fact, or NO_FACT, nothing else."""
         messages=[{"role": "user", "content": prompt}],
     )
     canonical = response["message"]["content"].strip()
+    canonical = canonical.strip('"').strip("'")  # strip stray wrapping quotes the model sometimes adds
 
     # Guard: reject placeholder/empty extractions even if the model didn't
     # correctly say NO_FACT — catches "Unknown", "N/A", "Not specified", etc.
@@ -251,7 +312,10 @@ def execute(decision: dict) -> str:
             return answer_general_question(fact_text, domain)
         memory.store(canonical_fact, domain=domain, content_type="fact")
         log.info("fact_remembered", extra={"domain": domain, "text": canonical_fact})
-        return "Got it, I'll remember that."
+        return _acknowledge_fact(fact_text)
+
+    if func_name == "correct_fact":
+        return _handle_correction(decision.get("_original_input", ""), domain)
 
     if func_name == "unsupported":
         reason = decision.get("reason", "this request")
@@ -313,6 +377,8 @@ def format_result(func_name: str, result) -> str:
     """Turns raw function output into a short plain-language summary."""
     if func_name == "free_space_summary":
         return f"You have {result['free_gb']}GB free out of {result['total_gb']}GB total ({result['used_gb']}GB used)."
+    if func_name == "directory_size":
+        return f"'{result['path']}' is {result['size_gb']}GB."
     if func_name == "top_memory_processes":
         lines = [f"{p['name']} — {p['memory_mb']}MB" for p in result]
         return "Top memory-consuming processes:\n" + "\n".join(lines)

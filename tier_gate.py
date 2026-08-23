@@ -29,6 +29,7 @@ FUNCTION_TIERS = {
     "disk_usage_by_folder": 0,
     "top_memory_processes": 0,
     "free_space_summary": 0,
+    "directory_size": 0,
 }
 
 # --- Hard pattern escalation ---
