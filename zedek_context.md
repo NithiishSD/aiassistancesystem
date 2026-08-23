@@ -118,9 +118,10 @@ actively verifying behavior, not a one-shot build.
   gate; isolated destructive dry-runs are not implemented yet.
 - `llm_provider.py` — shared task-aware provider chain: Gemini, Groq, NVIDIA
   NIM, OpenRouter, Cerebras, and local Ollama fallback. It returns both the
-  generated answer and provider source. Coding prompts are cloud-enabled by
-  default after secret redaction, while private-key material forces local
-  execution. `ALLOW_CLOUD=false` and `force_local=True` bypass cloud entirely.
+  generated answer and provider source. Coding prompts currently pass through
+  a full-access placeholder for the future LLM-backed security model;
+  `ALLOW_CLOUD_CODING=false` keeps coding local until that model exists.
+  `ALLOW_CLOUD=false` and `force_local=True` bypass cloud entirely.
 - `memory.py` — ChromaDB wrapper. `store()`/`retrieve()`/`delete_by_ids()`.
   Domain-partitioned ("personal"/"academic"), user_id-tagged, content_type
   distinguishes "fact" vs "conversation".
@@ -240,10 +241,11 @@ actively verifying behavior, not a one-shot build.
   failed generated patch once, and is dispatched by `coding_task`; live
   provider calls and repository patch application still need testing/building.
 - `llm_provider.py` supports task-aware provider ordering and global/per-call
-  local-only operation. Coding messages are scrubbed for common secrets before
-  cloud use; private-key blocks force local execution. `ALLOW_CLOUD=false` or
-  `force_local=True` skips all cloud providers, while NVIDIA/OpenRouter model
-  catalogs remain cached for one hour.
+  local-only operation. Coding messages currently pass unchanged through a
+  placeholder boundary reserved for the future LLM-based security scanner.
+  Use `ALLOW_CLOUD_CODING=false` for local-only coding until that scanner is
+  implemented; `ALLOW_CLOUD=false` or `force_local=True` skips all cloud
+  providers.
 - Coding requests now pass through the tier gate before generating and running
   code in the resource-limited sandbox; repository patching still requires a
   future explicit approval workflow.

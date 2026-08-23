@@ -8,7 +8,6 @@ since free-tier model availability rotates frequently.
 from __future__ import annotations
 
 import os
-import re
 import time
 from typing import Any, Callable
 
@@ -47,20 +46,6 @@ TASK_PROVIDERS: dict[str, list[str]] = {
 }
 DEFAULT_CHAIN = ["gemini", "groq", "nvidia_nim", "openrouter", "cerebras", "local"]
 
-_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("generic_api_key", re.compile(r"(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}['\"]?")),
-    ("bearer_token", re.compile(r"(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}")),
-    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")),
-    ("password_assignment", re.compile(r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"]?[^\s'\"]{6,}['\"]?")),
-    ("db_connection_string", re.compile(r"(?i)(postgres|mysql|mongodb|redis)(\+\w+)?://[^\s'\"]+")),
-    ("nvapi_key", re.compile(r"nvapi-[A-Za-z0-9_-]{20,}")),
-    ("openai_style_key", re.compile(r"sk-[A-Za-z0-9_-]{20,}")),
-]
-_HARD_BLOCK_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("private_key_block", re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA |)PRIVATE KEY-----")),
-]
-
 _model_cache: dict[str, tuple[float, list[str]]] = {}
 
 
@@ -68,39 +53,17 @@ class AllProvidersUnavailableError(RuntimeError):
     """Raised when all configured providers, including local Ollama, fail."""
 
 
-def scrub_secrets(text: str) -> tuple[str, list[str]]:
-    """Redact common credentials before content is sent to a cloud provider."""
-    found: list[str] = []
-    for name, pattern in _SECRET_PATTERNS:
-        if pattern.search(text):
-            found.append(name)
-            text = pattern.sub("[REDACTED]", text)
-    return text, found
-
-
-def contains_hard_block(text: str) -> str | None:
-    """Return a hard-block match for content that must remain local."""
-    for name, pattern in _HARD_BLOCK_PATTERNS:
-        if pattern.search(text):
-            return name
-    return None
-
-
 def sanitize_messages_for_cloud(
     messages: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[str], bool]:
-    """Scrub secrets from messages and detect content that must stay local."""
-    scrubbed: list[dict[str, str]] = []
-    all_found: list[str] = []
-    hard_block = False
-    for message in messages:
-        content = message.get("content", "")
-        if contains_hard_block(content):
-            hard_block = True
-        clean, found = scrub_secrets(content)
-        all_found.extend(found)
-        scrubbed.append({**message, "content": clean})
-    return scrubbed, all_found, hard_block
+    """Placeholder for the future LLM-backed security scanner.
+
+    The security model is not implemented yet, so this intentionally grants
+    cloud coding providers full access to the original messages. Keep this
+    stable boundary so the future scanner can add findings, redaction, and
+    local-only decisions without changing provider routing.
+    """
+    return [dict(message) for message in messages], [], False
 
 
 def cloud_enabled() -> bool:
@@ -317,21 +280,20 @@ def generate_chat(
 ) -> dict[str, str]:
     """Generate a response using a task-aware provider chain.
 
-    Coding prompts are sanitized before cloud use and remain local when cloud
-    coding is disabled or hard-blocked by private-key material.
+    Coding prompts pass through the security-scanner placeholder before cloud
+    use. The placeholder currently leaves content unchanged; cloud coding can
+    be disabled with ALLOW_CLOUD_CODING=false until the security model exists.
     """
     if task == "coding" and not force_local:
         if not cloud_coding_allowed():
             force_local = True
         else:
-            original_messages = messages
             sanitized, secret_kinds, hard_block = sanitize_messages_for_cloud(messages)
             if secret_kinds:
                 log.info("secrets_redacted", extra={"kinds": secret_kinds})
             if hard_block:
                 log.info("hard_block_forcing_local", extra={})
                 force_local = True
-                messages = original_messages
             else:
                 messages = sanitized
 
