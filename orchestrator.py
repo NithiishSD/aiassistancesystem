@@ -330,6 +330,17 @@ Respond with ONLY the standardized fact, or NO_FACT, nothing else."""
     return canonical
 
 
+def _last_assistant_question() -> str | None:
+    """Checks if Zedek's most recent turn ended in a question, so we can
+    explicitly tell the model whether the user's new message is likely
+    answering it, versus starting something new."""
+    for turn in reversed(SESSION_HISTORY):
+        if turn["role"] == "assistant":
+            content = turn["content"].strip()
+            return content if content.endswith("?") else None
+    return None
+
+
 def answer_general_question(user_input: str, domain: str) -> str:
     """
     Handles requests that aren't system-agent function calls. Combines two
@@ -343,7 +354,23 @@ def answer_general_question(user_input: str, domain: str) -> str:
     long_term_lines = [f"- {item['text']}" for item in relevant_facts]
     long_term_block = "\n".join(long_term_lines) if long_term_lines else "(no relevant long-term facts found)"
 
+    previous_question = _last_assistant_question()
+    turn_structure_note = ""
+    if previous_question:
+        turn_structure_note = f"""
+Your previous message ended with this question: "{previous_question}"
+The user's new message below may (a) answer that question, (b) ask something entirely
+new, or (c) do both in one message. Identify which parts of their message are a reply
+to your question versus a new topic, and address each part clearly and separately —
+do not merge them into one confused statement."""
+
     prompt = f"""You are Zedek, a helpful personal assistant.
+The user you are talking to is a separate person — their own name and facts (if known)
+are listed below under "Long-term facts." Never confuse your own identity (Zedek, the
+assistant) with the user's identity.
+Never contradict, reverse, or "correct" a fact already stated about the user below —
+treat everything in "Long-term facts" as ground truth about the user, not up for debate.
+{turn_structure_note}
 
 Long-term facts relevant to this question:
 {long_term_block}

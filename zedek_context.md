@@ -232,6 +232,10 @@ actively verifying behavior, not a one-shot build.
 - Detailed process analysis now returns memory, CPU, and running-time data for
   Llama to interpret, while `open_application` launches PATH-resolved apps as
   a Tier 1 reversible action.
+- General-question answering now identifies whether the latest user message
+  answers Zedek's previous question or starts a new topic, and keeps the
+  assistant's identity separate from stored user facts to reduce blended or
+  contradictory replies.
 - Sandboxed Python execution exists through bubblewrap; broader repository
   mutation and test execution remain deliberately restricted.
 - No evaluator/verifier agent yet.
