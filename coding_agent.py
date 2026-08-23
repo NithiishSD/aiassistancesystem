@@ -14,12 +14,26 @@ from __future__ import annotations
 import ast
 import json
 import os
+import resource
 import shutil
 import subprocess
 import tempfile
 from typing import Any
 
 import llm_provider
+
+
+def _cloud_coding_enabled() -> bool:
+    """Require an explicit opt-in before sending coding context to the cloud."""
+    return os.getenv("ALLOW_CLOUD_CODING", "false").strip().lower() in {"true", "1", "yes"}
+
+
+def _apply_resource_limits(timeout_seconds: int) -> None:
+    """Bound CPU, memory, process count, and file growth inside the child."""
+    resource.setrlimit(resource.RLIMIT_CPU, (max(1, timeout_seconds), max(1, timeout_seconds)))
+    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+    resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (4 * 1024 * 1024, 4 * 1024 * 1024))
 
 
 class CodingSpecialist:
@@ -45,7 +59,11 @@ Return ONLY valid JSON with this shape:
 {{"goal": "...", "steps": ["..."], "files": ["..."], "tests": ["..."]}}
 The plan must be specific to the request, keep changes minimal, and include
 verification steps. Do not include markdown."""
-        result = llm_provider.generate_chat([{"role": "user", "content": prompt}], json_mode=True)
+        result = llm_provider.generate_chat(
+            [{"role": "user", "content": prompt}],
+            json_mode=True,
+            force_local=not _cloud_coding_enabled(),
+        )
         try:
             plan = json.loads(result["answer"])
         except (json.JSONDecodeError, TypeError):
@@ -81,7 +99,10 @@ Previous verification error, if any:
 
 Return ONLY the complete Python code that should be verified. Do not use
 markdown fences, explanations, shell commands, or code for unrelated files."""
-        result = llm_provider.generate_chat([{"role": "user", "content": prompt}])
+        result = llm_provider.generate_chat(
+            [{"role": "user", "content": prompt}],
+            force_local=not _cloud_coding_enabled(),
+        )
         code = result["answer"].strip()
         if code.startswith("```"):
             lines = code.splitlines()
@@ -184,6 +205,8 @@ class SandboxedPythonRunner:
                     text=True,
                     timeout=self.timeout_seconds,
                     check=False,
+                    start_new_session=True,
+                    preexec_fn=lambda: _apply_resource_limits(self.timeout_seconds),
                 )
             except subprocess.TimeoutExpired as error:
                 return {

@@ -32,6 +32,7 @@ FUNCTION_TIERS = {
     "directory_size": 0,
     "list_processes_detailed": 0,
     "open_application": 1,
+    "coding_task": 0,
 }
 
 # --- Hard pattern escalation ---

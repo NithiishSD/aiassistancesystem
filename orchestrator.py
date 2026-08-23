@@ -414,6 +414,16 @@ def execute(decision: dict) -> str:
     original_input = decision.get("_original_input", "")
 
     if func_name == "coding_task":
+        coding_gate = gate("coding_task", {}, user_input=original_input)
+        if coding_gate["action"] == "blocked":
+            return coding_gate["message"]
+        if coding_gate["action"] == "confirm":
+            print(coding_gate["message"])
+            if input("> ").strip().lower() != "y":
+                log.info("coding_task_confirmation_denied", extra={})
+                return "Cancelled."
+            log.info("coding_task_confirmation_granted", extra={})
+
         result = CODING_SPECIALIST.implement_and_verify(original_input)
         log.info("coding_task_verified", extra={
             "status": result["status"],
