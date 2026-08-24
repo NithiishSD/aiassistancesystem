@@ -81,3 +81,23 @@ separate follow-up milestones.
 The orchestrator now routes coding requests to the specialist's plan-only
 response. It reports that no files changed and waits for explicit approval;
 automatic patching is not enabled yet.
+
+
+
+
+
+
+
+
+
+
+
+You: okay i am a software systems student persuing my Msc.software system 5 years integration at psg college of technology and astro frondend framework is part of my skill learning and java and ml are my course for this 5th semester so do you understand
+Zedek: Gotcha 😄 You mean Astro, the frontend framework. Astro is a modern static-site and content-first framework designed for speed and minimal JS.  I can explain it in a fun, friendly, lightly playful, and casual way — want the quick version or the deeper breakdown?
+
+
+Zedek: I can review the project context or SRS document you'd like to share to help analyze and provide a roadmap for your Astro Frontend Framework project, which is part of your Data Structures course. Please share the document, and I'll be happy to assist.
+
+You: no you mistook astro frontend framework is not part of datastructure course and also there is no course of datastructure that i am currently learning so remove that from your mrmory
+Zedek: Gotcha 😄 You mean Astro, the frontend framework. Astro is a modern static-site and content-first framework designed for speed and minimal JS.  I can explain it in a fun, friendly, lightly playful, and casual way — want the quick version or the deeper breakdown?
+

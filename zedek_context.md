@@ -79,7 +79,7 @@ instruction.
    alone was unreliably misrouting requests (see known issues below) —
    **do not merge classification back into a single generative model call**
    without a strong reason; the split was a deliberate fix, not incidental.
-
+ 
 5. **Never trust a model's self-reported confidence or its own unvalidated
    output for storage.** Every place that writes to permanent memory
    (`canonicalize_fact`, fact corrections) validates the output before
@@ -102,8 +102,19 @@ instruction.
    (`source` field) — never hide which tier responded. Order: Gemini →
    Groq → NVIDIA NIM → GitHub Models → Cerebras → local Qwen (guaranteed
    fallback, no quota, works offline).
+  
+8**Hybrid Cascading Strategy**: 
+   - **Local Path**: Uses `semantic-router` (running `sentence-transformers/all-MiniLM-L6-v2` on CPU) for immediate, high-confidence local matches (`score >= 0.65`).
+   - **Cloud/LLM Escalation**: If local confidence drops below `0.65` or returns `general_question`, the input cascades to `llm_provider.py` using Function/Tool Calling schemas (`classify_intent`) for accurate intent identification.
 
-8. **Multi-user design (not yet built, but planned for)**: every memory
+9. **Dynamic Online Learning**:
+   - Rather than relying on hardcoded starter utterances, every prompt successfully classified via the LLM function-calling fallback is dynamically saved to local disk (`data/dynamic_utterances.json`).
+   - On future runs, these newly learned user-phrasings are loaded back into the local vector index, converting slow LLM fallbacks into instant local hits over time.
+   - **Quality Guardrail**: Prompts over 15 words are excluded from auto-saving to prevent cluttering the local vector space with multi-sentence or narrative prompts.
+
+10. **Function-Calling Schema**:
+   - Centralized tool declarations (`ROUTER_TOOLS`) map directly to Zedek's existing intent enumeration (`search_files`, `disk_usage_by_folder`, `top_memory_processes`, `free_space_summary`, `directory_size`, `remember_fact`, `correct_fact`, `coding_task`, `unsupported`, `list_processes_detailed`, `open_application`, `general_question`).
+11. **Multi-user design (not yet built, but planned for)**: every memory
    item is already tagged with `user_id` from day one, even with only one
    user (`nithiish`) currently. This was intentional — retrofitting
    per-user scoping later would be far more painful than building it in
@@ -134,10 +145,9 @@ instruction.
   `all-MiniLM-L6-v2` embedding pipeline. `store()`/`retrieve()`/
   `delete_by_ids()` are domain-partitioned ("personal"/"academic"),
   user_id-scoped, and content_type distinguishes "fact" vs "conversation".
-- `classifier.py` — DeBERTa-v3 zero-shot intent + domain classifier, CPU-only.
-  Categories: search_files, disk_usage_by_folder, top_memory_processes,
-  free_space_summary, list_processes_detailed, open_application, remember_fact,
-  correct_fact, coding_task, unsupported, general_question.
+classifier_tools.py — JSON function calling tool schema (ROUTER_TOOLS) mapping input queries to system intent categories.
+
+classifier.py — Hybrid Cascading classifier using semantic-router (CPU MiniLM encoder) for Layer 1 vector routing (threshold = 0.65) and llm_provider.py tool-calling for Layer 2. Features dynamic online learning saving new phrasing to data/dynamic_utterances.json.
 - `orchestrator.py` — the main pipeline. Routes via classifier.py, extracts
   args via a narrow Llama call, runs through tier_gate, executes or answers,
   manages SESSION_HISTORY and memory flush. This is the file most actively
@@ -216,7 +226,9 @@ instruction.
    Added a lightweight tone adapter that detects casual phrasing such as
    "hey", "bro", "pls", "quick" and responds in a more playful, relaxed,
    conversational style while still staying clear and useful.
-
+10. **Static Vector Router Misrouting & Missed Phrasings**:
+   - **Issue**: Static seed utterances in `semantic-router` failed on novel phrasing or slang, forcing requests into `general_question` or incorrect routes. Hardcoded updates were inefficient.
+   - **Fix**: Implemented Strategy 2 (Hybrid Cascading) with Tool Calling in `llm_provider.py` as Layer 2. Added automatic vector ingestion (`add_utterance_dynamically`) to persist LLM-routed queries locally in `data/dynamic_utterances.json`.
 ## Notable changes added during the Astro/ambiguity debugging pass
 
 ## Recent routing fix
@@ -366,7 +378,9 @@ instruction.
   file(s) for this pass.
 - Updated project tracking to reflect that this pass is complete and should not
   be re-opened unless a new regression appears.
-
+- **Hybrid Fallback Verified**: Inputs with low cosine similarity (< 0.65) successfully escalate to `query_llm_with_tools` and return structured intent arguments.
+- **Dynamic Learning Verified**: Evaluated with novel phrasing (e.g., *"Show me memory pigs running on CPU"*). The pipeline routed the query via LLM, appended the prompt to `data/dynamic_utterances.json`, rebuilt the local `SemanticRouter` in RAM, and subsequently resolved the identical phrase locally (`< 5ms`) on re-invocation.
+- **Word Count Guard Verified**: Complex queries with > 15 words execute via LLM tool-calling but are excluded from `dynamic_utterances.json` to prevent vector index contamination.
 ## Next steps (in the order previously agreed, now continuing from the current state)
 
 1. **Test provider-backed coding generation** with real free-tier API keys.
