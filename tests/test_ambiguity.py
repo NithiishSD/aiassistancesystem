@@ -22,3 +22,10 @@ def test_thank_you_is_not_correct_fact():
 
     assert result["function"] is None
     assert result["confidence"] == "high"
+
+
+def test_unsupported_media_control_is_not_a_fact_correction():
+    result = classify_intent("stop the music played in spotify")
+
+    assert result["function"] == "unsupported"
+    assert result["confidence"] == "high"

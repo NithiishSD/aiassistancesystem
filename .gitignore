@@ -10,3 +10,4 @@ logs/*
 *.log
 chrome-debug.log
 chroma_db/*
+.continue/*

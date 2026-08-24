@@ -8,6 +8,7 @@ since free-tier model availability rotates frequently.
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any, Callable
 
@@ -53,6 +54,29 @@ class AllProvidersUnavailableError(RuntimeError):
     """Raised when all configured providers, including local Ollama, fail."""
 
 
+def _safe_error_text(error: Exception) -> str:
+    """Remove credentials from provider errors before they reach logs."""
+    message = str(error)
+    message = re.sub(
+        r"([?&](?:key|api[_-]?key|token|access[_-]?token|secret[_-]?key)=)[^&\s]+",
+        r"\1[REDACTED]",
+        message,
+        flags=re.IGNORECASE,
+    )
+    for variable in (
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "NVIDIA_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_KEY",
+        "CEREBRAS_API_KEY",
+    ):
+        secret = os.getenv(variable, "")
+        if secret:
+            message = message.replace(secret, "[REDACTED]")
+    return message
+
+
 def sanitize_messages_for_cloud(
     messages: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[str], bool]:
@@ -93,7 +117,7 @@ def _cached_fetch(key: str, fetch_fn) -> list[str]:
         _model_cache[key] = (now, ids)
         return ids
     except Exception as error:
-        log.info("model_list_fetch_failed", extra={"provider": key, "error": str(error)})
+        log.info("model_list_fetch_failed", extra={"provider": key, "error": _safe_error_text(error)})
         # Serve stale cache if we have one rather than failing outright
         return cached[1] if cached else []
 
@@ -145,6 +169,7 @@ def _openai_compatible(
     model: str,
     messages: list[dict[str, str]],
     json_mode: bool,
+    extra_headers: dict[str, str] | None = None,
 ) -> str:
     if not api_key:
         raise RuntimeError(f"{source} API key is not configured")
@@ -153,9 +178,16 @@ def _openai_compatible(
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
     response = requests.post(
         endpoint,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers=headers,
         json=payload,
         timeout=REQUEST_TIMEOUT,
     )
@@ -218,16 +250,20 @@ def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> str:
 
 
 def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> str:
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY", "")
     if not api_key:
         raise RuntimeError("openrouter API key is not configured")
     return _openai_compatible(
         "openrouter",
         "https://openrouter.ai/api/v1/chat/completions",
         api_key,
-        resolve_openrouter_model(),
+        os.getenv("OPENROUTER_MODEL", "~openai/gpt-latest"),
         messages,
         json_mode,
+        extra_headers={
+            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
+            "X-OpenRouter-Title": os.getenv("OPENROUTER_SITE_NAME", "Zedek"),
+        },
     )
 
 
@@ -236,7 +272,7 @@ def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> str:
         "cerebras",
         "https://api.cerebras.ai/v1/chat/completions",
         os.getenv("CEREBRAS_API_KEY", ""),
-        os.getenv("CEREBRAS_MODEL", "llama3.1-8b"),
+        os.getenv("CEREBRAS_MODEL", "gpt-oss-120b"),
         messages,
         json_mode,
     )
@@ -263,7 +299,7 @@ def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool) -> dict
     try:
         answer = _local(messages, json_mode)
     except Exception as error:
-        log.info("local_fallback_failed", extra={"error": str(error)})
+        log.info("local_fallback_failed", extra={"error": _safe_error_text(error)})
         raise AllProvidersUnavailableError(
             "All cloud providers failed and local Ollama is unavailable. "
             f"Check `ollama serve` and `ollama pull {LOCAL_MODEL}`."
@@ -313,7 +349,7 @@ def generate_chat(
             log.info("provider_response", extra={"source": source})
             return {"answer": answer, "source": source}
         except Exception as error:
-            log.info("provider_failed", extra={"source": source, "error": str(error)})
+            log.info("provider_failed", extra={"source": source, "error": _safe_error_text(error)})
 
     return _run_local_or_raise(messages, json_mode)
 

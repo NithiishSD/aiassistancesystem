@@ -1,18 +1,9 @@
-"""
-Phase 6.5: Dedicated intent classifier (replaces Llama for routing).
+"""Offline semantic intent and domain routing for Zedek.
 
-Uses a DeBERTa-v3 zero-shot classification model — CPU-only, small (~700MB),
-never touches your 6GB VRAM at all. This model does ONE job: given text,
-score how well it matches each candidate intent. It doesn't generate text,
-doesn't hallucinate answers, doesn't get confused by multiple responsibilities.
-
-Llama3.1 no longer decides routing — it's now used only for:
-  - Extracting specific arguments once intent is already decided (narrow task)
-  - Canonicalizing facts
-  - Answering general questions
-
-This narrowing of responsibility is the point: each model does less, so each
-model does it more reliably.
+The Hugging Face encoder runs locally on CPU. ``semantic-router`` compares the
+input embedding with example utterances for each route; it does not generate
+text or use a model confidence claim. Populate the route utterance lists with
+examples from real user conversations as the classifier is tuned.
 """
 
 import os
@@ -21,45 +12,66 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip netwo
 # (safe because the model is downloaded once on first successful run; if you ever
 # need to re-download or switch models, temporarily unset this or delete the cache)
 
-from transformers import pipeline
+from semantic_router import Route, RouteLayer
+from semantic_router.encoders import HuggingFaceEncoder
 from zedek_logger import get_logger
 
 log = get_logger("classifier")
 
-MODEL_NAME = "MoritzLaurer/deberta-v3-base-zeroshot-v2.0"
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-_classifier = None
-
-
-def _get_classifier():
-    global _classifier
-    if _classifier is None:
-        log.info("loading_classifier_model", extra={"model": MODEL_NAME})
-        _classifier = pipeline("zero-shot-classification", model=MODEL_NAME, device=-1)  # CPU
-    return _classifier
+_encoder = None
+DEFAULT_INTENT = "general_question"
+ROUTE_THRESHOLD = 0.45
 
 
-# Each intent mapped to a natural-language description — the classifier
-# scores how well the input "entails" each of these descriptions.
-INTENT_LABELS = {
-    "search_files": "a request to search for or find a file on the computer",
-    "disk_usage_by_folder": "a request to check which folders are using the most disk space",
-    "top_memory_processes": "a request to check which processes are using the most memory or RAM",
-    "free_space_summary": "a request to check how much free disk space is available",
-    "directory_size": "a request to check the total size of a specific folder or the current working directory",
-    "remember_fact": "the user stating or declaring a new fact about themselves",
-    "correct_fact": "the user correcting, retracting, or saying something previously stated is now false or outdated",
-    "coding_task": "a request to inspect, explain, fix, or write software code",
-    "unsupported": "a request for the assistant to perform an action like booking, sending, or playing media that is outside the supported capabilities",
-    "list_processes_detailed": "a request to analyze, compare, or ask a nuanced question about running processes or applications (e.g. resource usage patterns, not just a simple top-N ranking)",
-    "open_application": "a request to open, launch, or start an application",
-    "general_question": "a general question, or a conversational message that is not a command",
+def _get_encoder():
+    global _encoder
+    if _encoder is None:
+        log.info("loading_local_embedding_model", extra={"model": MODEL_NAME, "device": "cpu"})
+        _encoder = HuggingFaceEncoder(name=MODEL_NAME, device="cpu")
+    return _encoder
+
+
+# Replace these starter utterances with representative examples from Zedek.
+INTENT_UTTERANCES = {
+    "search_files": ["find my resume file"],
+    "disk_usage_by_folder": ["which folders use the most disk space"],
+    "top_memory_processes": ["show the processes using the most RAM"],
+    "free_space_summary": ["how much free disk space do I have"],
+    "directory_size": ["how large is this folder"],
+    "remember_fact": ["remember that I study at PSG College of Technology"],
+    "correct_fact": ["that fact is false, please correct it"],
+    "coding_task": ["help me fix this Python code"],
+    "unsupported": ["play some music"],
+    "list_processes_detailed": ["why is this process using so much CPU"],
+    "open_application": ["open the calculator application"],
 }
 
-DOMAIN_LABELS = {
-    "personal": "about the user's personal life",
-    "academic": "about the user's studies or academics",
+DOMAIN_UTTERANCES = {
+    "personal": ["what do you remember about my personal life"],
+    "academic": ["help me with my studies"],
 }
+
+
+def _build_intent_router():
+    routes = [Route(name=name, utterances=utterances,
+                    score_threshold=ROUTE_THRESHOLD)
+                  for name, utterances in INTENT_UTTERANCES.items()]
+    return RouteLayer(encoder=_get_encoder(), routes=routes)
+
+
+def _build_domain_router():
+    routes = [Route(name=name, utterances=utterances,
+                    score_threshold=ROUTE_THRESHOLD)
+                  for name, utterances in DOMAIN_UTTERANCES.items()]
+    return RouteLayer(encoder=_get_encoder(), routes=routes)
+
+
+# Build both layers during startup so classification never initializes a model
+# lazily on the first user request.
+_intent_router = _build_intent_router()
+_domain_router = _build_domain_router()
 
 CONFIDENCE_THRESHOLD = 0.45  # below this, treat as low confidence regardless of top label
 # NOTE: raised from 0.35 after observing a real misfire at score=0.403 that was
@@ -103,6 +115,20 @@ def _is_acknowledgement_or_confirmation(text: str) -> bool:
     return len(cleaned.split()) <= 4 and any(word in cleaned for word in ["okay", "ok", "thanks", "thank", "got", "understood"])
 
 
+def _is_unsupported_action_request(text: str) -> bool:
+    """Catch unsupported control commands before semantic classification."""
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).strip()
+    if not cleaned:
+        return False
+
+    media_targets = r"(?:music|song|audio|video|media|spotify|youtube)"
+    media_action = rf"\b(?:play|pause|stop|resume|skip|next)\b.*\b{media_targets}\b"
+    reverse_media_action = rf"\b{media_targets}\b.*\b(?:play|pause|stop|resume|skip|next)\b"
+    app_control = r"\b(?:close|quit|kill|terminate|stop)\b.*\b(?:app|application|process|program)\b"
+    return bool(re.search(media_action, cleaned) or re.search(reverse_media_action, cleaned)
+                or re.search(app_control, cleaned))
+
+
 def classify_intent(text: str) -> dict:
     """
     Returns: {"function": str|None, "confidence": "high"|"low", "score": float}
@@ -113,17 +139,20 @@ def classify_intent(text: str) -> dict:
         log.info("intent_classified_acknowledgement", extra={"text": text})
         return {"function": None, "confidence": "high", "score": 0.0}
 
-    clf = _get_classifier()
-    label_keys = list(INTENT_LABELS.keys())
-    candidate_descriptions = list(INTENT_LABELS.values())
+    if _is_unsupported_action_request(text):
+        log.info("intent_classified_unsupported_action", extra={"text": text})
+        return {"function": "unsupported", "confidence": "high", "score": 1.0}
 
-    result = clf(text, candidate_descriptions)
-    top_description = result["labels"][0]
-    top_score = result["scores"][0]
-    top_key = label_keys[candidate_descriptions.index(top_description)]
+    result = _intent_router(text)
+    top_key = result.name or DEFAULT_INTENT
+    # Static RouteChoice objects do not carry the retrieval score in the
+    # pinned semantic-router version. A non-empty name means its route
+    # threshold was already satisfied; expose that threshold through the
+    # legacy score field.
+    top_score = ROUTE_THRESHOLD if result.name else 0.0
 
     confidence = "high" if top_score >= CONFIDENCE_THRESHOLD else "low"
-    func_value = None if top_key == "general_question" else top_key
+    func_value = None if top_key == DEFAULT_INTENT else top_key
 
     log.info("intent_classified", extra={"text": text, "intent": top_key,
                                            "score": round(top_score, 3), "confidence": confidence})
@@ -132,20 +161,15 @@ def classify_intent(text: str) -> dict:
 
 def classify_domain(text: str) -> str:
     """Returns 'personal' or 'academic'."""
-    clf = _get_classifier()
-    label_keys = list(DOMAIN_LABELS.keys())
-    candidate_descriptions = list(DOMAIN_LABELS.values())
-
-    result = clf(text, candidate_descriptions)
-    top_description = result["labels"][0]
-    top_key = label_keys[candidate_descriptions.index(top_description)]
+    result = _domain_router(text)
+    top_key = result.name or "personal"
 
     log.info("domain_classified", extra={"text": text, "domain": top_key})
     return top_key
 
 
 if __name__ == "__main__":
-    print("=== Classifier self-test (first run downloads the model, ~700MB) ===\n")
+    print("=== Classifier self-test (first run downloads the local embedding model) ===\n")
     test_cases = [
         "how much free space do I have",
         "I study at PSG College of Technology",

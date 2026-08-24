@@ -218,6 +218,16 @@ instruction.
 
 ## Notable changes added during the Astro/ambiguity debugging pass
 
+## Recent routing fix
+
+- Fixed an unsupported-control routing bug where "stop the music played in
+  Spotify" was classified as `correct_fact`, causing an unrelated stored fact
+  to be deleted and replaced with the command text. The classifier now detects
+  unsupported media and application-control commands before model
+  classification and routes them to `unsupported`.
+- Added a regression test ensuring the Spotify request cannot enter the fact
+  correction path.
+
 - Added `should_treat_as_disambiguation()` to detect when the user is
   clarifying a previous ambiguous term rather than making a real fact update.
 - Added `should_ask_ambiguous_term_question()` to catch under-specified inputs
@@ -252,6 +262,22 @@ instruction.
   unavailability rather than generated-code failures, so infrastructure
   failures do not trigger a pointless second generation attempt. A harmless
   sandbox run was re-tested successfully after this change.
+- A live provider smoke test reached the fallback chain but ended at local
+  Ollama after Gemini returned a model 404, Groq and Cerebras returned 404
+  responses, NVIDIA timed out, and OpenRouter was reported unconfigured. The
+  OpenRouter mismatch was caused by `.env` using `OPENROUTER_KEY` while the
+  adapter expected `OPENROUTER_API_KEY`; both names are now accepted. The
+  remaining provider responses need separate model, endpoint, and credential
+  verification. Any credentials exposed during testing must be rotated.
+- Provider exception logging now redacts API-key query parameters and known
+  configured provider-key values before writing errors to the structured log.
+- Provider request compatibility was updated from the supplied provider
+  examples: Cerebras now defaults to `gpt-oss-120b`, and OpenRouter accepts an
+  explicit `OPENROUTER_MODEL` (default `~openai/gpt-latest`) and sends its
+  optional `HTTP-Referer` and `X-OpenRouter-Title` headers. The OpenRouter
+  endpoint is reachable when it returns `429`; that indicates rate limiting,
+  not an invalid URL. Gemini's model 404 and remaining provider failures still
+  require independent account/model verification.
 - `llm_provider.py` supports task-aware provider ordering and global/per-call
   local-only operation. Coding messages currently pass unchanged through a
   placeholder boundary reserved for the future LLM-based security scanner.
@@ -281,6 +307,19 @@ instruction.
 
 ## Completed in the current iteration (do not repeat)
 
+- Replaced the DeBERTa zero-shot classifier with `semantic-router` using the
+  local CPU embedding model `sentence-transformers/all-MiniLM-L6-v2`.
+  `classifier.py` now defines explicit route utterance lists for every
+  existing intent and for the personal/academic domain split. Starter
+  utterances are intentionally easy to replace with examples from real use.
+  The repository currently has 12 intent labels (including
+  `general_question`), despite earlier notes referring to 11.
+- The semantic-router layers now initialize at classifier startup on CPU.
+  The 11 actionable categories are routes; `general_question` is returned as
+  the fallback when no route clears the configured 0.45 similarity threshold.
+  Static `RouteChoice` results in semantic-router 0.0.72 omit their retrieval
+  score, so matched routes expose the configured threshold through the legacy
+  `score` field while unmatched routes retain score 0.0.
 - Fixed the false `correct_fact` classification for acknowledgment phrases such
   as "okay thank you" and "thanks".
 - Added ambiguity detection for terms like "astro" so the assistant asks a
