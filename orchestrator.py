@@ -14,6 +14,7 @@ Pipeline: request -> intent + domain -> tier gate -> execute or retrieve+answer 
 """
 
 import json
+import re
 import ollama
 from zedek_logger import get_logger
 from system_agent import AVAILABLE_FUNCTIONS
@@ -90,71 +91,85 @@ def tone_for_prompt(user_input: str) -> str:
         return "friendly, lightly playful, and casual"
     return "warm, clear, and conversational"
 
+def detect_ambiguous_term(text: str) -> str | None:
+    """Finds if a known ambiguous term exists in the text as a standalone word."""
+    words = re.findall(r'\b\w+\b', text.lower())
+    for term in AMBIGUOUS_TERMS:
+        if term in words:
+            return term
+    return None
 
-def should_treat_as_disambiguation(previous_input: str, current_input: str) -> bool:
-    """Detect when the user is correcting a previous ambiguous term like 'astro'."""
-    prev = (previous_input or "").lower()
-    curr = (current_input or "").lower()
-
-    if "astro" not in prev and "astro" not in curr:
-        return False
-
-    clarification_signals = ["i meant", "i mean", "no i am talking about", "not astronomy", "not astrology", "actually", "frontend framework", "framework"]
-    if any(signal in curr for signal in clarification_signals):
-        if "framework" in curr or "frontend" in curr or "astronomy" in prev or "astrology" in prev:
-            return True
-
-    if "astro" in prev and "astro" in curr and ("framework" in curr or "frontend" in curr):
+def is_term_already_specified(text: str, term: str) -> bool:
+    """Checks if the user provided enough surrounding context to resolve the meaning."""
+    text_lower = text.lower()
+    
+    # Specific context markers for common ambiguous terms
+    context_signals = [
+        "framework", "frontend", "language", "code", "course", "skill", 
+        "study", "learning", "project", "subject", "lib", "library", "api",
+        "space", "stars", "planet", "game", "metal", "banking"
+    ]
+    
+    # If the user input is longer than 12 words, they are likely providing context, not asking a bare question
+    if len(text.split()) > 12:
         return True
 
-    return False
+    return any(signal in text_lower for signal in context_signals)
 
 
 def should_ask_ambiguous_term_question(user_input: str, recent_user_turns: list[str] | None = None) -> bool:
-    """Ask for clarification when a short ambiguous term could mean two different things."""
-    text = (user_input or "").lower()
-    if "astro" not in text:
+    """Only ask for clarification if a bare, under-specified ambiguous term is used."""
+    text = user_input or ""
+    term = detect_ambiguous_term(text)
+    
+    if not term:
         return False
 
-    if any(word in text for word in ["framework", "frontend", "astronomy", "astrology", "space", "stars"]):
+    # If the prompt is a correction, statement, or highly detailed, do NOT block it with ambiguity questions
+    correction_signals = ["no", "incorrect", "wrong", "mistake", "remove", "delete", "not part of", "correct"]
+    if any(sig in text.lower().split() for sig in correction_signals):
         return False
 
-    # If the user has already clarified earlier, don't keep asking the same question.
+    # If already specified by context in current turn
+    if is_term_already_specified(text, term):
+        return False
+
+    # Check if previously clarified in recent turns
     if recent_user_turns:
-        last = recent_user_turns[-1].lower()
-        if "framework" in last or "astronomy" in last or "astrology" in last:
+        last = recent_user_turns[-1]
+        if is_term_already_specified(last, term):
             return False
 
     return True
 
 
+def should_treat_as_disambiguation(previous_input: str, current_input: str) -> bool:
+    """Detect when the user is explicitly answering a prior ambiguity question."""
+    curr = (current_input or "").lower()
+    prev = (previous_input or "").lower()
+    
+    term = detect_ambiguous_term(prev) or detect_ambiguous_term(curr)
+    if not term:
+        return False
+
+    clarification_signals = ["i meant", "i mean", "talking about", "actually", "referring to"]
+    if any(sig in curr for sig in clarification_signals) and is_term_already_specified(curr, term):
+        return True
+
+    return False
+
+
 def generate_ambiguity_reply(user_input: str, previous_input: str | None = None) -> str:
-    """Produce a playful but clear clarification reply for ambiguous terms."""
+    """Produces a generalized clarification question based on the detected ambiguous term."""
+    term = detect_ambiguous_term(user_input) or detect_ambiguous_term(previous_input or "") or "that term"
+    meanings = AMBIGUOUS_TERMS.get(term, ["multiple different topics"])
+    
+    meanings_str = " or ".join(meanings)
     tone = tone_for_prompt(user_input)
-    previous = (previous_input or "").lower()
-
-    if "frontend" in user_input.lower() or "framework" in user_input.lower() or "framework" in previous:
-        if "astronomy" in previous or "astrology" in previous:
-            return (
-                "Ahh, gotcha 😄 I thought you meant astronomy/astrology at first. "
-                "You meant Astro, the frontend framework — right? "
-                "Astro is a modern frontend framework built for fast, content-first websites with minimal JavaScript. "
-                "Do you want the quick explainer, a beginner example, or a React-vs-Astro comparison?"
-            )
-        return (
-            f"Gotcha 😄 You mean Astro, the frontend framework. {('Astro is a modern static-site and content-first framework designed for speed and minimal JS. ')} "
-            f"I can explain it in a fun, {tone} way — want the quick version or the deeper breakdown?"
-        )
-
-    if "astronomy" in previous or "astrology" in previous:
-        return (
-            "Ooh, I was thinking of astronomy/astrology there 😅. If you meant Astro the frontend framework, "
-            "I can explain that too — but if you meant astronomy, I can cover that as well. Which one should I unpack?"
-        )
-
+    
     return (
-        f"Hmm, 'astro' can mean a few different things 😅. Are you asking about astronomy, astrology, or Astro the frontend framework? "
-        f"Tell me the one you mean and I’ll give you a {tone} explanation."
+        f"Hmm, '{term}' can refer to a few different things (like {meanings_str}) 😅. "
+        f"Which specific one are you referring to so I can give you a {tone} and accurate response?"
     )
 
 # NOTE: SYSTEM_PROMPT (the old classification prompt) has been removed —
@@ -193,12 +208,29 @@ def route_request(user_input: str) -> dict:
     # extraction — and this is now a narrow, well-defined task for Llama,
     # not a classification decision.
     if func_name in AVAILABLE_FUNCTIONS:
-        decision["args"] = _extract_args(func_name, user_input)
+        if func_name == "open_application":
+            decision["args"] = {"app_name": _extract_application_name(user_input)}
+        else:
+            decision["args"] = _extract_args(func_name, user_input)
     else:
         decision["args"] = {}
 
     log.info("routing_decision", extra={"decision": decision})
     return decision
+
+
+def _extract_application_name(user_input: str) -> str:
+    """Extract the requested application without relying on an LLM."""
+    text = re.sub(r"\s+", " ", (user_input or "").strip())
+    text = re.sub(
+        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|then\s+)?"
+        r"(?:open|launch|start)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\s+(?:application|app|program)$", "", text, flags=re.IGNORECASE)
+    return text.strip(" .,!?")
 
 
 def _extract_args(func_name: str, user_input: str) -> dict:

@@ -1,7 +1,7 @@
 import pytest
 
 from classifier import classify_intent
-from orchestrator import should_treat_as_disambiguation, tone_for_prompt
+from orchestrator import should_ask_ambiguous_term_question, should_treat_as_disambiguation, tone_for_prompt
 
 
 def test_should_treat_as_disambiguation_for_astro():
@@ -42,3 +42,9 @@ def test_close_application_remains_unsupported():
     result = classify_intent("close brave application")
 
     assert result["function"] == "unsupported"
+
+
+def test_meta_question_about_astro_is_not_ambiguity_request():
+    question = "you confused astro with so many words like that what are other words you would get confused"
+
+    assert should_ask_ambiguous_term_question(question) is False

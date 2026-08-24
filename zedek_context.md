@@ -347,6 +347,10 @@ instruction.
   launcher still requires the requested executable to be discoverable through
   `PATH`; this environment currently exposes neither `brave` nor
   `brave-browser`. Closing applications remains unsupported by design.
+- Narrowed the ambiguity guard so meta-questions about ambiguous terms, such
+  as asking which other words could be confused, proceed to normal Q&A instead
+  of receiving the canned `astro` clarification prompt. Added a regression
+  test for the exact user wording.
 - `llm_provider.py` now logs the effective `ALLOW_CLOUD` and
   `ALLOW_CLOUD_CODING` settings at startup and records when a request is routed
   directly to local Ollama, making accidental cloud-mode configuration visible.
