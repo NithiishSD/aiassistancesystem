@@ -94,7 +94,7 @@ def tone_for_prompt(user_input: str) -> str:
 def detect_ambiguous_term(text: str) -> str | None:
     """Finds if a known ambiguous term exists in the text as a standalone word."""
     words = re.findall(r'\b\w+\b', text.lower())
-    for term in AMBIGUOUS_TERMS:
+    for term in classifier.AMBIGUOUS_TERMS:
         if term in words:
             return term
     return None
@@ -162,7 +162,7 @@ def should_treat_as_disambiguation(previous_input: str, current_input: str) -> b
 def generate_ambiguity_reply(user_input: str, previous_input: str | None = None) -> str:
     """Produces a generalized clarification question based on the detected ambiguous term."""
     term = detect_ambiguous_term(user_input) or detect_ambiguous_term(previous_input or "") or "that term"
-    meanings = AMBIGUOUS_TERMS.get(term, ["multiple different topics"])
+    meanings = classifier.AMBIGUOUS_TERMS.get(term, ["multiple different topics"])
     
     meanings_str = " or ".join(meanings)
     tone = tone_for_prompt(user_input)

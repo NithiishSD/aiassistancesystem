@@ -25,22 +25,65 @@ MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 _encoder = None
 DEFAULT_INTENT = "general_question"
 ROUTE_THRESHOLD = 0.45
+AMBIGUOUS_TERMS = {
+    # --- Existing Entries ---
+    "astro": ["astronomy/astrology", "Astro frontend web framework"],
+    "rust": ["Rust programming language", "iron oxidation/corrosion"],
+    "go": ["Go/Golang programming language", "the board game Go"],
+    "swift": ["Swift programming language", "SWIFT banking/financial network", "the bird"],
+    "spark": ["Apache Spark Big Data framework", "electrical spark"],
 
+    # --- Programming Languages vs. Common Words ---
+    "python": ["Python programming language", "the snake"],
+    "java": ["Java programming language", "Java island / coffee"],
+    "ruby": ["Ruby programming language", "the gemstone"],
+    "perl": ["Perl programming language", "pearl gemstone"],
+    "julia": ["Julia programming language", "the name Julia"],
+    "dart": ["Dart programming language", "thrown projectile game"],
+    "r": ["R statistics programming language", "the letter R"],
+    "c": ["C programming language", "the letter C / music note"],
+    "processing": ["Processing graphics language", "CPU data processing"],
+    "scratch": ["Scratch block coding tool", "physical mark/scratch"],
 
-def _get_encoder():
-    global _encoder
-    if _encoder is None:
-        model_name = MODEL_PATH if os.path.isfile(os.path.join(MODEL_PATH, "config.json")) else MODEL_ID
-        log.info("loading_local_embedding_model", extra={"model": model_name, "device": "cpu"})
-        try:
-            _encoder = HuggingFaceEncoder(name=model_name, device="cpu")
-        except OSError as exc:
-            raise RuntimeError(
-                f"The local embedding model is not cached at '{MODEL_PATH}'. "
-                "Run setup.sh to download it once."
-            ) from exc
-    return _encoder
+    # --- CS Frameworks/Tools vs. General Words ---
+    "react": ["React.js frontend library", "chemical or human emotional reaction"],
+    "angular": ["Angular web framework", "geometric angles/geometry"],
+    "vue": ["Vue.js frontend framework", "view/sight (misspelling or French word)"],
+    "flask": ["Flask Python web framework", "drinking container"],
+    "django": ["Django Python framework", "the name Django / movie"],
+    "spring": ["Spring Java/Boot framework", "elastic coil / season"],
+    "express": ["Express.js Node framework", "fast transport / emotional expression"],
+    "docker": ["Docker container tool", "port worker"],
+    "git": ["Git version control system", "British slang term"],
+    "bash": ["Bash shell terminal", "party / striking something hard"],
+    "huggingface": ["Hugging Face AI library/hub", "literal hugging gesture/emoji"],
 
+    # --- Dual CS Concepts (Hardware/OS vs. Concepts) ---
+    "kernel": ["Operating System Kernel", "corn/nut kernel or math matrix kernel"],
+    "thread": ["CPU Execution Thread", "sewing thread or forum discussion thread"],
+    "process": ["OS Running Process", "general workflow or business step"],
+    "bus": ["Computer Hardware Bus (PCI/Data)", "transit vehicle"],
+    "port": ["Network TCP/UDP Port or Hardware Port", "seaport or wine"],
+    "shell": ["Linux/Unix Shell Terminal", "seashell or outer casing"],
+    "driver": ["Hardware Device Driver", "vehicle driver or golf club"],
+    "terminal": ["Command-line Terminal application", "airport or bus terminal"],
+
+    # --- CS Core Concepts vs. Everyday English ---
+    "bug": ["Software Code Defect/Error", "biological insect"],
+    "patch": ["Software Update/Code Patch", "fabric patch or eye patch"],
+    "cache": ["Hardware/Memory Cache", "hidden store of objects"],
+    "cookie": ["HTTP Browser Cookie", "baked snack"],
+    "salt": ["Cryptographic Salt", "table salt / sodium chloride"],
+    "hash": ["Hashing algorithm / SHA key", "hash brown food or hashtag"],
+    "class": ["OOP Code Class / Blueprints", "school classroom or social class"],
+    "string": ["Data type (text sequence)", "twine / musical instrument string"],
+    "array": ["Data structure (contiguous memory)", "an arrangement/display of items"],
+    "tree": ["Binary/Data Structure Tree", "botanical tree"],
+    "stack": ["Call stack / Stack data structure", "pile of physical items"],
+    "queue": ["Queue data structure (FIFO)", "line of people waiting"],
+    "matrix": ["Mathematical/2D Array Matrix", "The Matrix movie / grid structure"],
+    "socket": ["Network Socket (IP + Port)", "electrical wall outlet"],
+}
 
 INTENT_UTTERANCES = {
     "search_files": [
@@ -176,6 +219,21 @@ DOMAIN_UTTERANCES = {
         "semester exam schedules and grades",
     ],
 }
+def _get_encoder():
+    global _encoder
+    if _encoder is None:
+        model_name = MODEL_PATH if os.path.isfile(os.path.join(MODEL_PATH, "config.json")) else MODEL_ID
+        log.info("loading_local_embedding_model", extra={"model": model_name, "device": "cpu"})
+        try:
+            _encoder = HuggingFaceEncoder(name=model_name, device="cpu")
+        except OSError as exc:
+            raise RuntimeError(
+                f"The local embedding model is not cached at '{MODEL_PATH}'. "
+                "Run setup.sh to download it once."
+            ) from exc
+    return _encoder
+
+
 
 def _build_intent_router():
     routes = [Route(name=name, utterances=utterances,

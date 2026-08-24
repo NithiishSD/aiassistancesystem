@@ -1,8 +1,7 @@
 """Cloud-first chat provider adapter with a local Ollama fallback.
 
-Providers are tried in order until one succeeds. NVIDIA and OpenRouter
-resolve their model dynamically against each provider's live catalog,
-since free-tier model availability rotates frequently.
+Providers are tried in order until one succeeds. Gemini, Groq, NVIDIA, and OpenRouter
+resolve their models dynamically against each provider's live catalog.
 """
 
 from __future__ import annotations
@@ -30,20 +29,36 @@ log.info("provider_mode_configured", extra={
     "cloud_coding_allowed": os.getenv("ALLOW_CLOUD_CODING", "true").strip().lower() not in ("false", "0", "no"),
 })
 
-# Preferred model order per provider — first one found live in the
-# provider's current catalog wins. Update these lists as the free-tier
-# landscape shifts; the resolver does the rest.
+# Dynamic candidate pools — first live match in provider's catalog wins
+GEMINI_CANDIDATES = [
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite",
+]
+GROQ_CANDIDATES = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama3-70b-8192",
+    "llama3-8b-8192",
+]
 NVIDIA_CODING_CANDIDATES = [
-    "deepseek-ai/deepseek-v4-flash-0731",
+    "meta/llama-3.3-70b-instruct",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
     "mistralai/mistral-nemotron",
 ]
 OPENROUTER_CODING_CANDIDATES = [
-    "z-ai/glm-5.2:free",
-    "deepseek/deepseek-v4-flash:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "z-ai/glm-4.5-air:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "qwen/qwen-2.5-72b-instruct:free",
 ]
-
+# Dynamic candidate pools — first live match in provider's catalog wins
+GEMINI_CANDIDATES = [
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+]
 TASK_PROVIDERS: dict[str, list[str]] = {
     "coding": ["nvidia_nim", "openrouter", "groq", "local"],
     "general_qa": ["gemini", "groq", "cerebras", "local"],
@@ -85,23 +100,12 @@ def _safe_error_text(error: Exception) -> str:
 def sanitize_messages_for_cloud(
     messages: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[str], bool]:
-    """Placeholder for the future LLM-backed security scanner.
-
-    The security model is not implemented yet, so this intentionally grants
-    cloud coding providers full access to the original messages. Keep this
-    stable boundary so the future scanner can add findings, redaction, and
-    local-only decisions without changing provider routing.
-    """
+    """Placeholder for the future LLM-backed security scanner."""
     return [dict(message) for message in messages], [], False
 
 
 def cloud_enabled() -> bool:
-    """Whether cloud providers should be tried at all.
-
-    Controlled by the ALLOW_CLOUD env var (defaults to enabled).
-    Set ALLOW_CLOUD=false / 0 / no in your .env, or export it in the
-    shell before running, to force local-only mode without touching code.
-    """
+    """Whether cloud providers should be tried at all."""
     return os.getenv("ALLOW_CLOUD", "true").strip().lower() not in ("false", "0", "no")
 
 
@@ -123,8 +127,36 @@ def _cached_fetch(key: str, fetch_fn) -> list[str]:
         return ids
     except Exception as error:
         log.info("model_list_fetch_failed", extra={"provider": key, "error": _safe_error_text(error)})
-        # Serve stale cache if we have one rather than failing outright
         return cached[1] if cached else []
+
+
+def _fetch_gemini_models() -> list[str]:
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        return []
+    response = requests.get(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        params={"key": api_key},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    models = response.json().get("models", [])
+    return [
+        m["name"].replace("models/", "")
+        for m in models
+        if "generateContent" in m.get("supportedGenerationMethods", [])
+    ]
+
+
+def _fetch_groq_models() -> list[str]:
+    api_key = os.getenv("GROQ_API_KEY", "")
+    response = requests.get(
+        "https://api.groq.com/openai/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return [m["id"] for m in response.json().get("data", [])]
 
 
 def _fetch_nvidia_models() -> list[str]:
@@ -149,13 +181,27 @@ def _fetch_openrouter_free_models() -> list[str]:
     ]
 
 
+def resolve_gemini_model() -> str:
+    live = _cached_fetch("gemini", _fetch_gemini_models)
+    for candidate in GEMINI_CANDIDATES:
+        if candidate in live:
+            return candidate
+    return live[0] if live else GEMINI_CANDIDATES[0]
+
+
+def resolve_groq_model() -> str:
+    live = _cached_fetch("groq", _fetch_groq_models)
+    for candidate in GROQ_CANDIDATES:
+        if candidate in live:
+            return candidate
+    return live[0] if live else GROQ_CANDIDATES[0]
+
+
 def resolve_nvidia_model() -> str:
     live = _cached_fetch("nvidia", _fetch_nvidia_models)
     for candidate in NVIDIA_CODING_CANDIDATES:
         if candidate in live:
             return candidate
-    # Nothing on our shortlist is live — fall back to whatever NVIDIA has,
-    # or the first candidate anyway and let the call fail loudly.
     return live[0] if live else NVIDIA_CODING_CANDIDATES[0]
 
 
@@ -202,7 +248,6 @@ def _openai_compatible(
         raise ValueError(f"{source} returned a non-text response")
     return content
 
-
 def _gemini(messages: list[dict[str, str]], json_mode: bool) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -217,24 +262,34 @@ def _gemini(messages: list[dict[str, str]], json_mode: bool) -> str:
     if json_mode:
         generation_config["responseMimeType"] = "application/json"
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-        params={"key": api_key},
-        json={"contents": contents, "generationConfig": generation_config},
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-    parts = response.json()["candidates"][0]["content"]["parts"]
-    return "".join(part["text"] for part in parts)
+    model_name = os.getenv("GEMINI_MODEL") or resolve_gemini_model()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
 
+    # Try up to 2 times to handle transient 503/500 errors
+    for attempt in range(2):
+        try:
+            response = requests.post(
+                url,
+                params={"key": api_key},
+                json={"contents": contents, "generationConfig": generation_config},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            parts = response.json()["candidates"][0]["content"]["parts"]
+            return "".join(part["text"] for part in parts)
+        except requests.exceptions.HTTPError as err:
+            if err.response.status_code >= 500 and attempt == 0:
+                time.sleep(1)
+                continue
+            raise
 
 def _groq(messages: list[dict[str, str]], json_mode: bool) -> str:
+    model = os.getenv("GROQ_MODEL") or resolve_groq_model()
     return _openai_compatible(
         "groq",
         "https://api.groq.com/openai/v1/chat/completions",
         os.getenv("GROQ_API_KEY", ""),
-        os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        model,
         messages,
         json_mode,
     )
@@ -258,11 +313,14 @@ def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY", "")
     if not api_key:
         raise RuntimeError("openrouter API key is not configured")
+
+    model = os.getenv("OPENROUTER_MODEL") or resolve_openrouter_model()
+
     return _openai_compatible(
         "openrouter",
         "https://openrouter.ai/api/v1/chat/completions",
         api_key,
-        os.getenv("OPENROUTER_MODEL", "~openai/gpt-latest"),
+        model,
         messages,
         json_mode,
         extra_headers={
@@ -277,7 +335,7 @@ def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> str:
         "cerebras",
         "https://api.cerebras.ai/v1/chat/completions",
         os.getenv("CEREBRAS_API_KEY", ""),
-        os.getenv("CEREBRAS_MODEL", "gpt-oss-120b"),
+        os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
         messages,
         json_mode,
     )
@@ -319,12 +377,7 @@ def generate_chat(
     force_local: bool = False,
     task: str | None = None,
 ) -> dict[str, str]:
-    """Generate a response using a task-aware provider chain.
-
-    Coding prompts pass through the security-scanner placeholder before cloud
-    use. The placeholder currently leaves content unchanged; cloud coding can
-    be disabled with ALLOW_CLOUD_CODING=false until the security model exists.
-    """
+    """Generate a response using a task-aware provider chain."""
     if task == "coding" and not force_local:
         if not cloud_coding_allowed():
             force_local = True
