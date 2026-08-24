@@ -8,11 +8,12 @@ groq==0.11.0
 # --- Vector memory (used from Phase 5 onward, installed now to avoid re-setup) ---
 chromadb==0.5.20
 
-# --- Zero-shot intent classification (Phase 6.5: replaces Llama for routing) ---
-# NOTE: torch must be installed separately as CPU-only to avoid requiring
-# CUDA/cuDNN (this classifier intentionally runs on CPU, not GPU):
+# --- Offline semantic intent/domain routing ---
+# Install CPU-only torch before this file so sentence-transformers does not
+# pull a CUDA build:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
-transformers==4.46.3
+semantic-router==0.0.72
+sentence-transformers==3.2.1
 
 # --- Orchestration / async ---
 python-dotenv==1.0.1
