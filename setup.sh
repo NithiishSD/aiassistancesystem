@@ -45,6 +45,13 @@ echo "Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+# 6. Cache the local semantic-router embedding model before offline startup.
+# The classifier sets HF_HUB_OFFLINE=1 during normal operation, so this
+# explicit one-time download must happen while network access is available.
+echo "Caching local intent and memory embedding model..."
+mkdir -p models/all-MiniLM-L6-v2
+HF_HUB_OFFLINE=0 python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', local_dir='models/all-MiniLM-L6-v2')"
+
 echo ""
 echo "=== Setup complete ==="
 echo "Activate the environment with: conda activate ./zedek-env"

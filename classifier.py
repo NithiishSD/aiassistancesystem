@@ -18,7 +18,9 @@ from zedek_logger import get_logger
 
 log = get_logger("classifier")
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "models", "all-MiniLM-L6-v2")
 
 _encoder = None
 DEFAULT_INTENT = "general_question"
@@ -28,8 +30,15 @@ ROUTE_THRESHOLD = 0.45
 def _get_encoder():
     global _encoder
     if _encoder is None:
-        log.info("loading_local_embedding_model", extra={"model": MODEL_NAME, "device": "cpu"})
-        _encoder = HuggingFaceEncoder(name=MODEL_NAME, device="cpu")
+        model_name = MODEL_PATH if os.path.isfile(os.path.join(MODEL_PATH, "config.json")) else MODEL_ID
+        log.info("loading_local_embedding_model", extra={"model": model_name, "device": "cpu"})
+        try:
+            _encoder = HuggingFaceEncoder(name=model_name, device="cpu")
+        except OSError as exc:
+            raise RuntimeError(
+                f"The local embedding model is not cached at '{MODEL_PATH}'. "
+                "Run setup.sh to download it once."
+            ) from exc
     return _encoder
 
 
@@ -45,7 +54,12 @@ INTENT_UTTERANCES = {
     "coding_task": ["help me fix this Python code"],
     "unsupported": ["play some music"],
     "list_processes_detailed": ["why is this process using so much CPU"],
-    "open_application": ["open the calculator application"],
+    "open_application": [
+        "open the calculator application",
+        "can you open Brave application",
+        "launch the browser",
+        "start an installed application",
+    ],
 }
 
 DOMAIN_UTTERANCES = {

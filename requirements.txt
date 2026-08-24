@@ -7,6 +7,8 @@ groq==0.11.0
 
 # --- Vector memory (used from Phase 5 onward, installed now to avoid re-setup) ---
 chromadb==0.5.20
+# Chroma 0.5.20 calls the legacy three-argument PostHog API.
+posthog==3.5.0
 
 # --- Offline semantic intent/domain routing ---
 # Install CPU-only torch before this file so sentence-transformers does not

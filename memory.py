@@ -15,28 +15,71 @@ Domains: "personal", "academic" (kept as separate ChromaDB collections so
 academic retrieval never surfaces personal context and vice versa).
 """
 
-import chromadb
-from chromadb.config import Settings
+import os
 import uuid
 import time
+import chromadb
+from chromadb.config import Settings
+from semantic_router.encoders import HuggingFaceEncoder
 from zedek_logger import get_logger
 
 log = get_logger("memory")
 
 CHROMA_PATH = "./chroma_db"
 DEFAULT_USER_ID = "nithiish"  # the owner; multi-user enrollment updates this later
+EMBEDDING_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "models", "all-MiniLM-L6-v2")
+ALLOWED_DOMAINS = {"personal", "academic"}
+ALLOWED_CONTENT_TYPES = {"fact", "conversation"}
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 client = chromadb.PersistentClient(path=CHROMA_PATH, settings=Settings(anonymized_telemetry=False))
+
+
+class _ChromaEmbeddingFunction:
+    """Adapt semantic-router's local encoder to Chroma's strict call API."""
+
+    def __init__(self) -> None:
+        model_name = (EMBEDDING_MODEL_PATH
+                      if os.path.isfile(os.path.join(EMBEDDING_MODEL_PATH, "config.json"))
+                      else EMBEDDING_MODEL_ID)
+        self._encoder = HuggingFaceEncoder(name=model_name, device="cpu")
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        return self._encoder(input)
+
+
+embedding_function = _ChromaEmbeddingFunction()
 
 _collections = {}
 
 
 def _get_collection(domain: str):
     """Returns (creating if needed) the ChromaDB collection for a domain."""
+    _validate_domain(domain)
     if domain not in _collections:
-        _collections[domain] = client.get_or_create_collection(name=f"zedek_{domain}")
+        _collections[domain] = client.get_or_create_collection(
+            name=f"zedek_{domain}", embedding_function=embedding_function
+        )
         log.info("collection_ready", extra={"domain": domain})
     return _collections[domain]
+
+
+def _validate_domain(domain: str) -> None:
+    if domain not in ALLOWED_DOMAINS:
+        raise ValueError(f"Unknown domain '{domain}' — must be 'personal' or 'academic'.")
+
+
+def _validate_user_id(user_id: str) -> None:
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id must be a non-empty string.")
+
+
+def _validate_content_type(content_type: str) -> None:
+    if content_type not in ALLOWED_CONTENT_TYPES:
+        raise ValueError("content_type must be 'fact' or 'conversation'.")
 
 
 def store(text: str, domain: str = "personal", content_type: str = "fact",
@@ -45,9 +88,9 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
     Stores a piece of text (a fact or a conversation turn) in memory.
     Returns the generated item ID.
     """
-    if domain not in ("personal", "academic"):
-        raise ValueError(f"Unknown domain '{domain}' — must be 'personal' or 'academic'.")
-
+    _validate_domain(domain)
+    _validate_user_id(user_id)
+    _validate_content_type(content_type)
     collection = _get_collection(domain)
     item_id = str(uuid.uuid4())
 
@@ -57,7 +100,9 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
         "timestamp": time.time(),
     }
     if extra_metadata:
-        metadata.update(extra_metadata)
+        reserved_keys = set(metadata)
+        metadata.update({key: value for key, value in extra_metadata.items()
+                         if key not in reserved_keys})
 
     collection.add(documents=[text], ids=[item_id], metadatas=[metadata])
     log.info("memory_stored", extra={"domain": domain, "content_type": content_type,
@@ -71,6 +116,13 @@ def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_I
     Semantic search over stored memory, restricted to this user_id and domain.
     Optionally filter further by content_type ("fact" or "conversation").
     """
+    _validate_domain(domain)
+    _validate_user_id(user_id)
+    if not isinstance(top_k, int) or top_k < 1:
+        raise ValueError("top_k must be a positive integer.")
+    if content_type:
+        _validate_content_type(content_type)
+
     collection = _get_collection(domain)
 
     where = {"user_id": user_id}
@@ -91,11 +143,17 @@ def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_I
     return items
 
 
-def delete_by_ids(ids: list[str], domain: str = "personal") -> None:
-    """Deletes specific stored items by their IDs. Used for fact corrections."""
+def delete_by_ids(ids: list[str], domain: str = "personal",
+                  user_id: str = DEFAULT_USER_ID) -> None:
+    """Deletes IDs only when they belong to the requested user and domain."""
+    _validate_domain(domain)
+    _validate_user_id(user_id)
     collection = _get_collection(domain)
-    collection.delete(ids=ids)
-    log.info("memory_deleted", extra={"domain": domain, "ids": ids})
+    owned_ids = collection.get(ids=ids, where={"user_id": user_id}).get("ids", [])
+    if owned_ids:
+        collection.delete(ids=owned_ids)
+    log.info("memory_deleted", extra={"domain": domain, "user_id": user_id,
+                                        "ids": owned_ids})
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ zedek-env/*
 .env.*
 !.env.example
 __pycache__/
+models/
 *.py[cod]
 .pytest_cache/
 logs/*

@@ -130,9 +130,10 @@ instruction.
   a full-access placeholder for the future LLM-backed security model;
   `ALLOW_CLOUD_CODING=false` keeps coding local until that model exists.
   `ALLOW_CLOUD=false` and `force_local=True` bypass cloud entirely.
-- `memory.py` — ChromaDB wrapper. `store()`/`retrieve()`/`delete_by_ids()`.
-  Domain-partitioned ("personal"/"academic"), user_id-tagged, content_type
-  distinguishes "fact" vs "conversation".
+- `memory.py` — ChromaDB wrapper with an explicit local CPU
+  `all-MiniLM-L6-v2` embedding pipeline. `store()`/`retrieve()`/
+  `delete_by_ids()` are domain-partitioned ("personal"/"academic"),
+  user_id-scoped, and content_type distinguishes "fact" vs "conversation".
 - `classifier.py` — DeBERTa-v3 zero-shot intent + domain classifier, CPU-only.
   Categories: search_files, disk_usage_by_folder, top_memory_processes,
   free_space_summary, list_processes_detailed, open_application, remember_fact,
@@ -247,7 +248,10 @@ instruction.
 ## Testing status
 
 - Phases 1-5 (environment, logging, orchestrator+system agent, tier gate,
-  memory) are built and confirmed working via direct user testing.
+  memory) are built and confirmed working. Phase 5 now uses the same explicit
+  local CPU embedding model as semantic-router; acceptance testing confirmed
+  user isolation, domain isolation, content-type filtering, and
+  ownership-aware deletion in a temporary ChromaDB database.
 - Phase 6 (memory integration, session history, fact canonicalization,
   classifier-based routing, fact correction) is built and re-tested after the
   ambiguity/correction fix pass.
@@ -320,6 +324,32 @@ instruction.
   Static `RouteChoice` results in semantic-router 0.0.72 omit their retrieval
   score, so matched routes expose the configured threshold through the legacy
   `score` field while unmatched routes retain score 0.0.
+- `setup.sh` now performs the one-time CPU download/cache of
+  `sentence-transformers/all-MiniLM-L6-v2` after installing dependencies, and
+  `classifier.py` reports a direct setup instruction if that cache is missing.
+- The embedding cache now lives in the project-local ignored `models/`
+  directory. Both classifier and Chroma memory load that same local path,
+  avoiding separate Hugging Face cache locations and Chroma's default ONNX
+  download. The cache was populated and both modules were verified importing
+  with `HF_HUB_OFFLINE=1`.
+- Pinned `posthog==3.5.0` because ChromaDB 0.5.20 uses PostHog's legacy
+  three-argument `capture()` API; newer PostHog 7.x emits a telemetry warning
+  even when Chroma anonymized telemetry is disabled.
+- Completed Phase 5 memory hardening: ChromaDB now receives embeddings from a
+  shared semantic-router `HuggingFaceEncoder` on CPU instead of downloading
+  its separate default ONNX model. Reserved identity metadata cannot be
+  overwritten, inputs are validated, and deletion checks `user_id` ownership.
+- Broadened the `open_application` semantic-router examples so generic app
+  requests such as "open Brave application" reach the existing allowlisted
+  launcher. Application closing remains intentionally unsupported because no
+  safely gated close function exists yet.
+- Verified the application routing regression: six focused tests pass. The
+  launcher still requires the requested executable to be discoverable through
+  `PATH`; this environment currently exposes neither `brave` nor
+  `brave-browser`. Closing applications remains unsupported by design.
+- `llm_provider.py` now logs the effective `ALLOW_CLOUD` and
+  `ALLOW_CLOUD_CODING` settings at startup and records when a request is routed
+  directly to local Ollama, making accidental cloud-mode configuration visible.
 - Fixed the false `correct_fact` classification for acknowledgment phrases such
   as "okay thank you" and "thanks".
 - Added ambiguity detection for terms like "astro" so the assistant asks a
@@ -390,7 +420,7 @@ instruction.
 
 - Accuracy over speed/latency, explicitly, more than once.
 - Local models are a backup for no-internet situations only — most usage
-  is expected to be cloud-backed, free-tier.
+  is expected to be cloud-backed, free-tier. and also manual turn of cloud service incase of problem or token issue
 - Prefers narrow, single-responsibility components over one model doing
   many jobs — this preference directly drove the classifier/Llama split.
 - Wants to review and test every change personally — don't skip verification

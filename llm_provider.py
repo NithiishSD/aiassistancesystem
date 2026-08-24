@@ -25,6 +25,11 @@ LOCAL_MODEL = "llama3.1:8b"
 REQUEST_TIMEOUT = 45
 MODEL_CACHE_TTL = 3600  # re-check live catalogs at most once an hour
 
+log.info("provider_mode_configured", extra={
+    "cloud_enabled": os.getenv("ALLOW_CLOUD", "true").strip().lower() not in ("false", "0", "no"),
+    "cloud_coding_allowed": os.getenv("ALLOW_CLOUD_CODING", "true").strip().lower() not in ("false", "0", "no"),
+})
+
 # Preferred model order per provider — first one found live in the
 # provider's current catalog wins. Update these lists as the free-tier
 # landscape shifts; the resolver does the rest.
@@ -334,6 +339,9 @@ def generate_chat(
                 messages = sanitized
 
     if force_local or not cloud_enabled():
+        log.info("local_only_mode", extra={
+            "reason": "force_local" if force_local else "ALLOW_CLOUD_disabled",
+        })
         return _run_local_or_raise(messages, json_mode)
 
     chain = TASK_PROVIDERS.get(task, DEFAULT_CHAIN) if task else DEFAULT_CHAIN

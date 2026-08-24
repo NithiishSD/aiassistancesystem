@@ -29,3 +29,16 @@ def test_unsupported_media_control_is_not_a_fact_correction():
 
     assert result["function"] == "unsupported"
     assert result["confidence"] == "high"
+
+
+def test_open_application_routes_generic_app_request():
+    result = classify_intent("can you open brave application")
+
+    assert result["function"] == "open_application"
+    assert result["confidence"] == "high"
+
+
+def test_close_application_remains_unsupported():
+    result = classify_intent("close brave application")
+
+    assert result["function"] == "unsupported"
