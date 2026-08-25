@@ -4,8 +4,21 @@ The Hugging Face encoder runs locally on CPU. ``semantic-router`` compares the
 input embedding with example utterances for each route; it does not generate
 text or use a model confidence claim. Populate the route utterance lists with
 examples from real user conversations as the classifier is tuned.
+
+Hybrid Cascading Architecture
+------------------------------
+Layer 1  — semantic-router (CPU, sentence-transformers/all-MiniLM-L6-v2).
+           Returns immediately if cosine similarity >= 0.65.
+Layer 2  — LLM tool-calling via llm_provider.generate_chat().
+           Triggered when Layer 1 score < 0.65 or returns no match.
+Feedback — Successful LLM classifications are saved back to
+           data/dynamic_utterances.json and merged into the in-memory
+           RouteLayer so the same phrasing becomes a fast local hit
+           on the next call.  Prompts > 15 words are excluded from
+           saving to prevent vector index contamination.
 """
 
+import json
 import os
 import re
 os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip network check
@@ -22,9 +35,26 @@ MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "models", "all-MiniLM-L6-v2")
 
+# Path for dynamically learned utterances (created at runtime on first save).
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DYNAMIC_UTTERANCES_PATH = os.path.join(_PROJECT_ROOT, "data", "dynamic_utterances.json")
+
+# Maximum word count for a prompt to be eligible for dynamic saving.
+# Longer prompts are multi-sentence narratives and would pollute the local
+# vector index with non-reusable phrasings.
+MAX_DYNAMIC_WORDS = 15
+
 _encoder = None
 DEFAULT_INTENT = "general_question"
-ROUTE_THRESHOLD = 0.45
+
+# ── Thresholds ──────────────────────────────────────────────────────────────
+# Both constants are kept separate for clarity; they represent the same
+# operational boundary: >= 0.65 → high-confidence local hit, < 0.65 → LLM.
+ROUTE_THRESHOLD = 0.65       # passed to each Route so semantic-router only
+                              # reports a name when cosine similarity is high enough
+CONFIDENCE_THRESHOLD = 0.65  # used in classify_intent() to decide LLM escalation
+# ────────────────────────────────────────────────────────────────────────────
+
 AMBIGUOUS_TERMS = {
     # --- Existing Entries ---
     "astro": ["astronomy/astrology", "Astro frontend web framework"],
@@ -219,6 +249,10 @@ DOMAIN_UTTERANCES = {
         "semester exam schedules and grades",
     ],
 }
+
+
+# ── Encoder ──────────────────────────────────────────────────────────────────
+
 def _get_encoder():
     global _encoder
     if _encoder is None:
@@ -234,18 +268,75 @@ def _get_encoder():
     return _encoder
 
 
+# ── Dynamic utterance persistence ────────────────────────────────────────────
 
-def _build_intent_router():
-    routes = [Route(name=name, utterances=utterances,
-                    score_threshold=ROUTE_THRESHOLD)
-                  for name, utterances in INTENT_UTTERANCES.items()]
+def _load_dynamic_utterances() -> dict[str, list[str]]:
+    """Read data/dynamic_utterances.json.
+
+    Returns a ``{intent: [phrase, ...]}`` dict. Returns an empty dict if the
+    file does not exist or is malformed — never raises.
+    """
+    if not os.path.isfile(DYNAMIC_UTTERANCES_PATH):
+        return {}
+    try:
+        with open(DYNAMIC_UTTERANCES_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            log.info("dynamic_utterances_malformed", extra={"path": DYNAMIC_UTTERANCES_PATH})
+            return {}
+        # Validate: each key must map to a list of strings
+        cleaned: dict[str, list[str]] = {}
+        for intent, phrases in data.items():
+            if isinstance(phrases, list):
+                cleaned[intent] = [p for p in phrases if isinstance(p, str) and p.strip()]
+        return cleaned
+    except (json.JSONDecodeError, OSError) as exc:
+        log.info("dynamic_utterances_load_error", extra={"error": str(exc)})
+        return {}
+
+
+def _save_dynamic_utterances(data: dict[str, list[str]]) -> None:
+    """Atomically write the utterance dict to disk."""
+    os.makedirs(os.path.dirname(DYNAMIC_UTTERANCES_PATH), exist_ok=True)
+    tmp_path = DYNAMIC_UTTERANCES_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, DYNAMIC_UTTERANCES_PATH)
+
+
+# ── Router construction ───────────────────────────────────────────────────────
+
+def _build_intent_router() -> RouteLayer:
+    """Build the intent RouteLayer, merging static + dynamically learned utterances."""
+    dynamic = _load_dynamic_utterances()
+
+    # Merge dynamic phrases into a copy of the static utterance dict
+    merged: dict[str, list[str]] = {
+        name: list(utterances) for name, utterances in INTENT_UTTERANCES.items()
+    }
+    for intent, phrases in dynamic.items():
+        if intent in merged:
+            # Deduplicate while preserving order: static utterances first
+            existing_set = set(merged[intent])
+            for phrase in phrases:
+                if phrase not in existing_set:
+                    merged[intent].append(phrase)
+                    existing_set.add(phrase)
+        else:
+            log.info("dynamic_utterance_unknown_intent", extra={"intent": intent})
+
+    routes = [
+        Route(name=name, utterances=utterances, score_threshold=ROUTE_THRESHOLD)
+        for name, utterances in merged.items()
+    ]
     return RouteLayer(encoder=_get_encoder(), routes=routes)
 
 
-def _build_domain_router():
-    routes = [Route(name=name, utterances=utterances,
-                    score_threshold=ROUTE_THRESHOLD)
-                  for name, utterances in DOMAIN_UTTERANCES.items()]
+def _build_domain_router() -> RouteLayer:
+    routes = [
+        Route(name=name, utterances=utterances, score_threshold=ROUTE_THRESHOLD)
+        for name, utterances in DOMAIN_UTTERANCES.items()
+    ]
     return RouteLayer(encoder=_get_encoder(), routes=routes)
 
 
@@ -254,11 +345,137 @@ def _build_domain_router():
 _intent_router = _build_intent_router()
 _domain_router = _build_domain_router()
 
-CONFIDENCE_THRESHOLD = 0.45  # below this, treat as low confidence regardless of top label
-# NOTE: raised from 0.35 after observing a real misfire at score=0.403 that was
-# incorrectly treated as "high" confidence. Revisit this value as more test data
-# comes in — it may need further tuning in either direction.
 
+def add_utterance_dynamically(text: str, intent: str) -> None:
+    """Persist a newly learned phrase and hot-reload the in-memory router.
+
+    Quality guardrails
+    ------------------
+    - Prompts > MAX_DYNAMIC_WORDS words are skipped (narrative / multi-sentence).
+    - ``general_question`` is never persisted — it would teach the router to
+      give up on phrasing that might later be resolvable locally.
+    - Duplicates (already in static or dynamic lists) are silently skipped.
+
+    The in-memory ``_intent_router`` is rebuilt after a successful save so
+    the same phrase resolves locally on the very next call (< 5 ms).
+    """
+    global _intent_router
+
+    if not text or not intent:
+        return
+
+    if intent == DEFAULT_INTENT:
+        log.info("dynamic_learning_skipped_general_question", extra={"text": text})
+        return
+
+    word_count = len(text.split())
+    if word_count > MAX_DYNAMIC_WORDS:
+        log.info("dynamic_learning_skipped_too_long",
+                 extra={"text": text, "word_count": word_count, "limit": MAX_DYNAMIC_WORDS})
+        return
+
+    # Check static list first
+    static_phrases = INTENT_UTTERANCES.get(intent, [])
+    if text in static_phrases:
+        log.info("dynamic_learning_skipped_already_static", extra={"text": text, "intent": intent})
+        return
+
+    # Load, deduplicate, save
+    data = _load_dynamic_utterances()
+    existing = data.setdefault(intent, [])
+    if text in existing:
+        log.info("dynamic_learning_skipped_already_dynamic", extra={"text": text, "intent": intent})
+        return
+
+    existing.append(text)
+    _save_dynamic_utterances(data)
+    log.info("dynamic_utterance_saved", extra={"text": text, "intent": intent,
+                                                "total_for_intent": len(existing)})
+
+    # Hot-reload in-memory router so the phrase works immediately
+    _intent_router = _build_intent_router()
+    log.info("intent_router_rebuilt", extra={"intent": intent})
+
+
+# ── LLM escalation (Layer 2) ─────────────────────────────────────────────────
+
+def query_llm_with_tools(text: str) -> dict:
+    """Layer 2: ask an LLM to identify the intent via structured tool-calling.
+
+    Uses ``llm_provider.generate_chat()`` with ``json_mode=True`` and a
+    system prompt that embeds the full ``ROUTER_TOOLS`` schema.  This avoids
+    needing native per-provider function-calling support (whose APIs differ
+    across Gemini, Groq, NVIDIA, etc.) and instead relies on the LLM's
+    instruction-following ability with a well-structured JSON schema prompt.
+
+    Returns
+    -------
+    dict with keys:
+        ``function`` — intent name string or None (for general_question),
+        ``confidence`` — always "high" when this path succeeds,
+        ``score``     — 1.0 (sentinel meaning "LLM decided"),
+        ``via_llm``   — True,
+        ``llm_args``  — any extra arguments the LLM extracted (may be empty).
+    On failure, returns general_question with ``via_llm=True``.
+    """
+    # Import here to avoid circular imports at module level (llm_provider
+    # imports nothing from classifier).
+    import llm_provider
+    from classifier_tools import ROUTER_TOOLS, VALID_INTENT_NAMES
+
+    tool_schema_str = json.dumps(ROUTER_TOOLS, indent=2)
+
+    system_prompt = (
+        "You are a strict intent-classification assistant for an AI personal assistant "
+        "called Zedek. Given a user message, pick EXACTLY ONE tool from the list below "
+        "that best describes the user's intent. Respond ONLY with a JSON object in this "
+        'exact format: {"function_name": "<tool name>", "arguments": {}}.\n'
+        "Do not add explanation. Do not add markdown. Output valid JSON only.\n\n"
+        f"Available tools:\n{tool_schema_str}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": text},
+    ]
+
+    try:
+        result = llm_provider.generate_chat(messages, json_mode=True, task="general_qa")
+        raw = result.get("answer", "")
+        parsed = json.loads(raw)
+        func_name = parsed.get("function_name", "").strip()
+        llm_args = parsed.get("arguments", {})
+
+        if func_name not in VALID_INTENT_NAMES:
+            log.info("llm_tool_call_unknown_intent",
+                     extra={"raw_function_name": func_name, "text": text})
+            func_name = DEFAULT_INTENT
+
+        func_value = None if func_name == DEFAULT_INTENT else func_name
+        log.info("llm_tool_call_classified",
+                 extra={"text": text, "intent": func_name,
+                        "provider": result.get("source", "unknown")})
+        return {
+            "function": func_value,
+            "confidence": "high",
+            "score": 1.0,
+            "via_llm": True,
+            "llm_args": llm_args if isinstance(llm_args, dict) else {},
+        }
+
+    except (json.JSONDecodeError, KeyError, Exception) as exc:
+        log.info("llm_tool_call_failed",
+                 extra={"text": text, "error": str(exc)})
+        return {
+            "function": None,
+            "confidence": "low",
+            "score": 0.0,
+            "via_llm": True,
+            "llm_args": {},
+        }
+
+
+# ── Pre-classification guards ─────────────────────────────────────────────────
 
 def _is_acknowledgement_or_confirmation(text: str) -> bool:
     """Treat short gratitude/acknowledgment phrases as neutral and non-correction."""
@@ -310,20 +527,37 @@ def _is_unsupported_action_request(text: str) -> bool:
                 or re.search(app_control, cleaned))
 
 
+# ── Public classification API ─────────────────────────────────────────────────
+
 def classify_intent(text: str) -> dict:
-    """
-    Returns: {"function": str|None, "confidence": "high"|"low", "score": float}
-    "function" is None for general_question; for remember_fact/unsupported it
-    returns those exact strings so the orchestrator can branch on them same as before.
+    """Hybrid two-layer intent classifier.
+
+    Returns a dict with keys:
+        ``function``   — intent name string, or None for general_question /
+                         acknowledgements.
+        ``confidence`` — ``"high"`` or ``"low"``.
+        ``score``      — cosine similarity from Layer 1, or 1.0 when routed
+                         via Layer 2 LLM.
+        ``via_llm``    — True when Layer 2 was used; False for Layer 1 hits.
+
+    Pipeline
+    --------
+    1. Pre-classification guards (acknowledgement, unsupported media).
+    2. Layer 1 — semantic-router (CPU).  If score >= 0.65, return immediately.
+    3. Layer 2 — LLM tool-calling.  Triggered when score < 0.65.
+    4. Dynamic learning — if Layer 2 identified a specific intent (not
+       general_question) and the phrase is <= 15 words, persist it so future
+       identical phrasing resolves via Layer 1.
     """
     if _is_acknowledgement_or_confirmation(text):
         log.info("intent_classified_acknowledgement", extra={"text": text})
-        return {"function": None, "confidence": "high", "score": 0.0}
+        return {"function": None, "confidence": "high", "score": 0.0, "via_llm": False}
 
     if _is_unsupported_action_request(text):
         log.info("intent_classified_unsupported_action", extra={"text": text})
-        return {"function": "unsupported", "confidence": "high", "score": 1.0}
+        return {"function": "unsupported", "confidence": "high", "score": 1.0, "via_llm": False}
 
+    # ── Layer 1: semantic-router ──────────────────────────────────────────
     result = _intent_router(text)
     top_key = result.name or DEFAULT_INTENT
     # Static RouteChoice objects do not carry the retrieval score in the
@@ -332,12 +566,32 @@ def classify_intent(text: str) -> dict:
     # legacy score field.
     top_score = ROUTE_THRESHOLD if result.name else 0.0
 
-    confidence = "high" if top_score >= CONFIDENCE_THRESHOLD else "low"
-    func_value = None if top_key == DEFAULT_INTENT else top_key
+    if top_score >= CONFIDENCE_THRESHOLD and top_key != DEFAULT_INTENT:
+        # High-confidence local hit — return fast
+        func_value = top_key  # already validated: never DEFAULT_INTENT here
+        log.info("intent_classified_layer1",
+                 extra={"text": text, "intent": top_key,
+                        "score": round(top_score, 3), "via_llm": False})
+        return {
+            "function": func_value,
+            "confidence": "high",
+            "score": round(top_score, 3),
+            "via_llm": False,
+        }
 
-    log.info("intent_classified", extra={"text": text, "intent": top_key,
-                                           "score": round(top_score, 3), "confidence": confidence})
-    return {"function": func_value, "confidence": confidence, "score": round(top_score, 3)}
+    # ── Layer 2: LLM tool-calling ─────────────────────────────────────────
+    log.info("intent_escalating_to_llm",
+             extra={"text": text, "layer1_score": round(top_score, 3),
+                    "layer1_intent": top_key})
+    llm_result = query_llm_with_tools(text)
+
+    # ── Dynamic feedback loop ────────────────────────────────────────────
+    if llm_result.get("via_llm") and llm_result.get("function"):
+        # Only persist concrete intents, not general_question (guarded inside
+        # add_utterance_dynamically as well, but being explicit here for clarity)
+        add_utterance_dynamically(text, llm_result["function"])
+
+    return llm_result
 
 
 def classify_domain(text: str) -> str:
@@ -350,17 +604,29 @@ def classify_domain(text: str) -> str:
 
 
 if __name__ == "__main__":
-    print("=== Classifier self-test (first run downloads the local embedding model) ===\n")
+    print("=== Classifier self-test ===\n")
+    print(f"Layer 1 threshold : {ROUTE_THRESHOLD}")
+    print(f"LLM escalation    : score < {CONFIDENCE_THRESHOLD}\n")
+
     test_cases = [
-        "how much free space do I have",
-        "I study at PSG College of Technology",
-        "what is my name",
-        "find my resume file",
-        "play some music",
-        "no it is not in Coimbatore, it is in Erode district near Bhavanisagar",
+        ("Layer 1 expected hit",  "how much free space do I have"),
+        ("Layer 1 expected hit",  "find my resume file"),
+        ("Layer 1 expected hit",  "play some music"),
+        ("Layer 1 expected hit",  "open Brave application"),
+        ("Layer 1 expected hit",  "I study at PSG College of Technology"),
+        ("Layer 1 expected hit",  "okay thank you"),
+        ("Likely LLM escalation", "show me memory pigs running on CPU"),
+        ("Likely LLM escalation", "yo how much juice is left on the disk"),
+        ("General question",      "what is my name"),
     ]
-    for text in test_cases:
-        result = classify_intent(text)
-        domain = classify_domain(text)
-        print(f"'{text}'\n  -> function={result['function']}, confidence={result['confidence']}, "
-              f"score={result['score']}, domain={domain}\n")
+    for label, text in test_cases:
+        r = classify_intent(text)
+        d = classify_domain(text)
+        via = "LLM" if r.get("via_llm") else "L1"
+        print(
+            f"[{label}]\n"
+            f"  input   : '{text}'\n"
+            f"  intent  : {r['function']}  confidence={r['confidence']}  "
+            f"score={r['score']}  via={via}\n"
+            f"  domain  : {d}\n"
+        )

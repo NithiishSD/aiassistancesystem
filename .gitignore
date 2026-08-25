@@ -12,3 +12,5 @@ logs/*
 chrome-debug.log
 chroma_db/*
 .continue/*
+# Runtime-generated personal phrasings — not source code, not committed
+data/dynamic_utterances.json

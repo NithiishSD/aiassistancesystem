@@ -200,9 +200,15 @@ def route_request(user_input: str) -> dict:
 
     func_name = intent_result["function"]
     confidence = intent_result["confidence"]
+    via_llm = intent_result.get("via_llm", False)
 
-    decision = {"function": func_name, "domain": domain, "confidence": confidence,
-                "score": intent_result["score"]}
+    decision = {
+        "function": func_name,
+        "domain": domain,
+        "confidence": confidence,
+        "score": intent_result["score"],
+        "via_llm": via_llm,  # True when Layer 2 LLM tool-calling was used
+    }
 
     # Only real functions (not remember_fact/unsupported/None) need argument
     # extraction — and this is now a narrow, well-defined task for Llama,
@@ -215,7 +221,9 @@ def route_request(user_input: str) -> dict:
     else:
         decision["args"] = {}
 
-    log.info("routing_decision", extra={"decision": decision})
+    log.info("routing_decision",
+             extra={"decision": {k: v for k, v in decision.items() if k != "args"},
+                    "via_llm": via_llm})
     return decision
 
 

@@ -145,9 +145,25 @@ instruction.
   `all-MiniLM-L6-v2` embedding pipeline. `store()`/`retrieve()`/
   `delete_by_ids()` are domain-partitioned ("personal"/"academic"),
   user_id-scoped, and content_type distinguishes "fact" vs "conversation".
-classifier_tools.py — JSON function calling tool schema (ROUTER_TOOLS) mapping input queries to system intent categories.
+- `classifier_tools.py` — Centralized JSON function-calling tool schema (`ROUTER_TOOLS`
+  and `VALID_INTENT_NAMES`) for the 12 known intents. Used exclusively by the Layer 2
+  LLM escalation path inside `classifier.py`. Must be kept in sync with `INTENT_UTTERANCES`.
+- `classifier.py` — Hybrid Cascading classifier. Layer 1: `semantic-router` (CPU MiniLM
+  encoder) with a `0.65` cosine threshold for fast local routing (< 5 ms). Layer 2:
+  LLM tool-calling via `llm_provider.py` when the Layer 1 score drops below `0.65`.
+  Dynamic online learning: successful LLM classifications are saved to
+  `data/dynamic_utterances.json` and hot-reloaded into the in-memory `RouteLayer`,
+  converting slow LLM paths into fast local hits over time. Quality guardrail: phrases
+  > 15 words and `general_question` outcomes are never saved.
+- `data/dynamic_utterances.json` — runtime-created JSON store of dynamically learned
+  user phrasings, keyed by intent name. Created automatically on first LLM-classified
+  save; gitignored (personal phrasing, not code). Loaded at classifier startup and
+  merged into the `RouteLayer` before any classification occurs.
+- `tests/test_hybrid_router.py` — 27-test offline suite (all LLM calls mocked) for the
+  hybrid router: Layer 1 local hits, Layer 2 escalation, dynamic persistence (save /
+  dedup / hot-reload), 15-word quality guard, `general_question` exclusion, and
+  `ROUTER_TOOLS` schema integrity. All prior regression cases re-tested here too.
 
-classifier.py — Hybrid Cascading classifier using semantic-router (CPU MiniLM encoder) for Layer 1 vector routing (threshold = 0.65) and llm_provider.py tool-calling for Layer 2. Features dynamic online learning saving new phrasing to data/dynamic_utterances.json.
 - `orchestrator.py` — the main pipeline. Routes via classifier.py, extracts
   args via a narrow Llama call, runs through tier_gate, executes or answers,
   manages SESSION_HISTORY and memory flush. This is the file most actively
@@ -378,9 +394,26 @@ classifier.py — Hybrid Cascading classifier using semantic-router (CPU MiniLM 
   file(s) for this pass.
 - Updated project tracking to reflect that this pass is complete and should not
   be re-opened unless a new regression appears.
-- **Hybrid Fallback Verified**: Inputs with low cosine similarity (< 0.65) successfully escalate to `query_llm_with_tools` and return structured intent arguments.
-- **Dynamic Learning Verified**: Evaluated with novel phrasing (e.g., *"Show me memory pigs running on CPU"*). The pipeline routed the query via LLM, appended the prompt to `data/dynamic_utterances.json`, rebuilt the local `SemanticRouter` in RAM, and subsequently resolved the identical phrase locally (`< 5ms`) on re-invocation.
-- **Word Count Guard Verified**: Complex queries with > 15 words execute via LLM tool-calling but are excluded from `dynamic_utterances.json` to prevent vector index contamination.
+- **Hybrid Architecture with Dynamic Online Learning fully implemented** (this iteration):
+  - Created `classifier_tools.py` — `ROUTER_TOOLS` JSON schema and `VALID_INTENT_NAMES`
+    frozenset covering all 12 intent categories. This is the function-calling contract
+    used by the LLM escalation path. It must stay in sync with `INTENT_UTTERANCES`.
+  - Rewrote `classifier.py`: raised both `ROUTE_THRESHOLD` and `CONFIDENCE_THRESHOLD`
+    from 0.45 → **0.65** per the architecture spec. Added `_load_dynamic_utterances()`,
+    `_save_dynamic_utterances()`, `add_utterance_dynamically()` (with quality guardrail:
+    > 15 words or `general_question` → skip), and `_build_intent_router()` now merges
+    static + dynamic utterances before constructing the `RouteLayer`. Added
+    `query_llm_with_tools()` for Layer 2 LLM escalation via structured JSON prompt +
+    `json_mode=True`. `classify_intent()` now returns a `via_llm` flag and routes
+    through the complete two-layer cascade with the dynamic feedback loop.
+  - Updated `orchestrator.py`: `route_request()` captures and logs the new `via_llm`
+    flag from `classify_intent()` and passes it through in the routing decision dict.
+  - Created `tests/test_hybrid_router.py`: **34 tests, all passing** (27 new hybrid
+    tests + 7 regression tests). All LLM calls mocked for offline execution. Covers
+    Layer 1 local hits without LLM involvement, Layer 2 LLM escalation, dynamic
+    persistence (save/dedup/hot-reload), 15-word quality guard, `general_question`
+    exclusion, and `ROUTER_TOOLS` schema integrity.
+
 ## Next steps (in the order previously agreed, now continuing from the current state)
 
 1. **Test provider-backed coding generation** with real free-tier API keys.
