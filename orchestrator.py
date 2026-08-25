@@ -28,6 +28,7 @@ log = get_logger("orchestrator")
 
 ROUTING_MODEL = "llama3.1:8b"
 CODING_SPECIALIST = CodingSpecialist()
+LAST_ROUTING_DECISION: dict | None = None
 
 # --- Short-term session context (this run only, NOT persisted to disk) ---
 # Separate from memory.py's long-term ChromaDB store. This holds the last
@@ -277,7 +278,14 @@ def _handle_correction(raw_text: str, domain: str) -> str:
     Handles a fact correction or retraction/deletion.
     Finds candidate stored facts, and either updates the fact with a new value
     or deletes/retracts it if the user indicated it was false or requested removal.
+    Also self-heals by pruning any recently learned dynamic utterance that led to this mistake.
     """
+    global LAST_ROUTING_DECISION
+    if LAST_ROUTING_DECISION and LAST_ROUTING_DECISION.get("via_llm"):
+        classifier.remove_utterance_dynamically(
+            LAST_ROUTING_DECISION.get("_original_input", ""),
+            LAST_ROUTING_DECISION.get("function")
+        )
     last_q = _last_assistant_question()
     search_query = f"{last_q} {raw_text}".strip() if last_q and len(raw_text.split()) <= 6 else raw_text
     candidates = memory.retrieve(search_query, domain=domain, content_type="fact", top_k=4)
@@ -525,6 +533,10 @@ def execute(decision: dict) -> str:
             return "Plan rejected. No code was generated or modified."
         log.info("coding_plan_approved", extra={"goal": plan.get("goal", "")})
 
+        # Execution verified: plan approved by user
+        if decision.get("via_llm"):
+            classifier.add_utterance_dynamically(original_input, "coding_task")
+
         # ── Execute: patch → test → verify ───────────────────────────────
         result = CODING_SPECIALIST.implement_and_verify(original_input)
         log.info("coding_task_verified", extra={
@@ -587,6 +599,11 @@ def execute(decision: dict) -> str:
         for c_fact in canonical_facts:
             memory.store(c_fact, domain=domain, content_type="fact")
             log.info("fact_remembered", extra={"domain": domain, "text": c_fact})
+
+        # Execution verified: facts canonicalized and stored
+        if decision.get("via_llm"):
+            classifier.add_utterance_dynamically(original_input, "remember_fact")
+
         return _acknowledge_fact(fact_text)
 
     if func_name == "correct_fact":
@@ -624,6 +641,14 @@ def execute(decision: dict) -> str:
     try:
         result = AVAILABLE_FUNCTIONS[func_name](**args)
         log.info("execution_success", extra={"function": func_name, "call_args": args})
+
+        # Execution-verified dynamic learning: only persist if action truly succeeded
+        if decision.get("via_llm"):
+            if func_name == "open_application":
+                if isinstance(result, dict) and result.get("launched") is True:
+                    classifier.add_utterance_dynamically(original_input, "open_application")
+            else:
+                classifier.add_utterance_dynamically(original_input, func_name)
 
         if func_name == "list_processes_detailed":
             return _reason_over_process_data(result, original_input)
@@ -776,8 +801,10 @@ def handle(user_input: str) -> str:
         _add_to_session("assistant", answer)
         return answer
 
+    global LAST_ROUTING_DECISION
     decision = route_request(user_input)
     decision["_original_input"] = user_input
+    LAST_ROUTING_DECISION = decision
     domain = decision.get("domain", "personal")
     if domain not in ("personal", "academic"):
         domain = "personal"

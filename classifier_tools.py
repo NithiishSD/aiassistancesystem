@@ -74,11 +74,13 @@ ROUTER_TOOLS: list[dict] = [
     {
         "name": "coding_task",
         "description": (
-            "User wants help with a programming or software development task: "
-            "writing code, debugging, refactoring, explaining algorithms, "
-            "creating scripts, or solving coding problems. "
-            "Examples: 'fix this Python function', 'write a binary search', "
-            "'why is my segfault happening', 'create a FastAPI route'."
+            "User wants help with a programming, coding, or software development task: "
+            "building websites, web pages, HTML/CSS/JS frontend, creating scripts, "
+            "writing code, debugging, refactoring, explaining algorithms, building apps, "
+            "or solving coding problems. "
+            "Examples: 'build a static website using html css', 'create a landing page for my store', "
+            "'build a website for grocery shop', 'fix this Python function', 'write a binary search', "
+            "'create a FastAPI route'."
         ),
     },
     {
@@ -94,8 +96,9 @@ ROUTER_TOOLS: list[dict] = [
     {
         "name": "open_application",
         "description": (
-            "User wants to launch, open, or start a specific installed application "
-            "on their system. "
+            "User wants to launch, open, or start a specific pre-installed desktop application "
+            "or program already on their system (e.g. calculator, browser, text editor, terminal). "
+            "NOT for building, creating, coding, or developing new websites, web apps, or programs. "
             "Examples: 'open VS Code', 'launch the browser', 'start VLC', "
             "'run the calculator app'."
         ),

@@ -52,6 +52,8 @@ class TestLayer1LocalHits:
         ("find my resume file",                  "search_files"),
         ("show the processes using the most RAM","top_memory_processes"),
         ("help me fix this Python code",         "coding_task"),
+        ("can you build me static webite using html css for jewelary store", "coding_task"),
+        ("build a website for grocery shop",     "coding_task"),
         ("can you open Brave application",       "open_application"),
         ("play some music on Spotify",           "unsupported"),
         ("okay thank you",                       None),  # acknowledgement guard
@@ -228,51 +230,40 @@ class TestDynamicLearning:
         # Router object must have been replaced (new RouteLayer instance)
         assert new_router_id != original_router_id
 
-    def test_feedback_loop_triggered_after_llm_classification(self, isolated_data_dir):
-        """When the LLM identifies a specific intent, it should be persisted."""
+    def test_semantic_sanity_filter_rejects_mismatched_intent(self, isolated_data_dir):
+        """Website creation queries must never be saved into open_application."""
         import classifier as clf
 
-        novel_phrase = "show me memory pigs running on CPU"
+        # Mismatched: coding query tried to be saved to open_application
+        saved = clf.add_utterance_dynamically("build a website for my shop", "open_application")
+        assert saved is False
+        assert not os.path.isfile(isolated_data_dir)
 
-        mock_result = MagicMock()
-        mock_result.name = None
-        mock_router = MagicMock(return_value=mock_result)
+    def test_remove_utterance_dynamically_self_heals(self, isolated_data_dir):
+        """remove_utterance_dynamically purges entries and rebuilds the router."""
+        import classifier as clf
 
-        with patch.object(clf, "_intent_router", mock_router), \
-             patch.object(clf, "query_llm_with_tools",
-                          return_value={
-                              "function": "top_memory_processes",
-                              "confidence": "high",
-                              "score": 1.0,
-                              "via_llm": True,
-                              "llm_args": {},
-                          }):
-            clf.classify_intent(novel_phrase)
+        phrase = "find my old project notes"
+        clf.add_utterance_dynamically(phrase, "search_files")
 
-        assert os.path.isfile(isolated_data_dir)
         with open(isolated_data_dir) as f:
             data = json.load(f)
-        assert novel_phrase in data.get("top_memory_processes", [])
+        assert phrase in data["search_files"]
+
+        # Prune / self-heal
+        removed = clf.remove_utterance_dynamically(phrase, "search_files")
+        assert removed is True
+
+        with open(isolated_data_dir) as f:
+            data = json.load(f)
+        assert "search_files" not in data or phrase not in data["search_files"]
 
     def test_general_question_llm_result_not_persisted(self, isolated_data_dir):
         """If the LLM returns general_question, nothing should be saved."""
         import classifier as clf
 
-        mock_result = MagicMock()
-        mock_result.name = None
-        mock_router = MagicMock(return_value=mock_result)
-
-        with patch.object(clf, "_intent_router", mock_router), \
-             patch.object(clf, "query_llm_with_tools",
-                          return_value={
-                              "function": None,  # general_question → None
-                              "confidence": "high",
-                              "score": 1.0,
-                              "via_llm": True,
-                              "llm_args": {},
-                          }):
-            clf.classify_intent("what is the meaning of life")
-
+        saved = clf.add_utterance_dynamically("what is recursion", "general_question")
+        assert saved is False
         assert not os.path.isfile(isolated_data_dir)
 
 

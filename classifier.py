@@ -204,6 +204,14 @@ INTENT_UTTERANCES = {
         "create a REST API endpoint using FastAPI",
         "fix the syntax error on line 42",
         "write unit tests for this python class",
+        "can you build me static webite using html css for jewelary store",
+        "build a static website using html and css",
+        "build a website for a grocery shop",
+        "create an html css landing page",
+        "develop a frontend web page",
+        "write code to build a website",
+        "create a fullstack application",
+        "build an ecommerce web page",
     ],
     "unsupported": [
         "play some music on Spotify",
@@ -257,66 +265,66 @@ DOMAIN_UTTERANCES = {
 
 # ── Encoder ──────────────────────────────────────────────────────────────────
 
-def _get_encoder():
+def _resolve_local_model_path():
+    return MODEL_PATH if os.path.isfile(os.path.join(MODEL_PATH, "config.json")) else MODEL_ID
+
+def _get_encoder() -> HuggingFaceEncoder:
+    """Return the shared CPU HuggingFaceEncoder, creating it on first call.
+
+    Points at the project-local models/ embedding cache so semantic-router and
+    Chroma memory share the same weights without re-downloading.
+    """
     global _encoder
     if _encoder is None:
-        model_name = MODEL_PATH if os.path.isfile(os.path.join(MODEL_PATH, "config.json")) else MODEL_ID
-        log.info("loading_local_embedding_model", extra={"model": model_name, "device": "cpu"})
-        try:
-            _encoder = HuggingFaceEncoder(name=model_name, device="cpu")
-        except OSError as exc:
-            raise RuntimeError(
-                f"The local embedding model is not cached at '{MODEL_PATH}'. "
-                "Run setup.sh to download it once."
-            ) from exc
+        model_name = _resolve_local_model_path()
+        _encoder = HuggingFaceEncoder(name=model_name, device="cpu")
     return _encoder
 
 
 # ── Dynamic utterance persistence ────────────────────────────────────────────
 
 def _load_dynamic_utterances() -> dict[str, list[str]]:
-    """Read data/dynamic_utterances.json.
-
-    Returns a ``{intent: [phrase, ...]}`` dict. Returns an empty dict if the
-    file does not exist or is malformed — never raises.
-    """
-    if not os.path.isfile(DYNAMIC_UTTERANCES_PATH):
+    """Read data/dynamic_utterances.json from disk, returning {} on error."""
+    if not os.path.exists(DYNAMIC_UTTERANCES_PATH):
         return {}
     try:
         with open(DYNAMIC_UTTERANCES_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if not isinstance(data, dict):
-            log.info("dynamic_utterances_malformed", extra={"path": DYNAMIC_UTTERANCES_PATH})
-            return {}
-        # Validate: each key must map to a list of strings
-        cleaned: dict[str, list[str]] = {}
-        for intent, phrases in data.items():
-            if isinstance(phrases, list):
-                cleaned[intent] = [p for p in phrases if isinstance(p, str) and p.strip()]
-        return cleaned
+        return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError) as exc:
-        log.info("dynamic_utterances_load_error", extra={"error": str(exc)})
+        log.info("dynamic_utterances_load_failed", extra={"error": str(exc)})
         return {}
 
 
 def _save_dynamic_utterances(data: dict[str, list[str]]) -> None:
-    """Atomically write the utterance dict to disk."""
+    """Write data to data/dynamic_utterances.json atomically via temp file."""
     os.makedirs(os.path.dirname(DYNAMIC_UTTERANCES_PATH), exist_ok=True)
-    tmp_path = DYNAMIC_UTTERANCES_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
-    os.replace(tmp_path, DYNAMIC_UTTERANCES_PATH)
+    temp_file = f"{DYNAMIC_UTTERANCES_PATH}.tmp"
+    try:
+        with open(temp_file, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False)
+        os.replace(temp_file, DYNAMIC_UTTERANCES_PATH)
+    except OSError as exc:
+        log.info("dynamic_utterances_save_failed", extra={"error": str(exc)})
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
 
 
-# ── Router construction ───────────────────────────────────────────────────────
+# ── Router construction (static + dynamic merged) ────────────────────────────
 
 def _build_intent_router() -> RouteLayer:
-    """Build the intent RouteLayer, merging static + dynamically learned utterances."""
-    dynamic = _load_dynamic_utterances()
+    """Build the Layer 1 intent RouteLayer from static + dynamic utterances.
 
-    # Merge dynamic phrases into a copy of the static utterance dict
+    Static utterances (from ``INTENT_UTTERANCES``) and runtime-learned
+    utterances (from ``data/dynamic_utterances.json``) are merged per intent.
+    Static phrases take precedence; duplicates are discarded.
+    """
+    dynamic = _load_dynamic_utterances()
     merged: dict[str, list[str]] = {
-        name: list(utterances) for name, utterances in INTENT_UTTERANCES.items()
+        name: list(phrases) for name, phrases in INTENT_UTTERANCES.items()
     }
     for intent, phrases in dynamic.items():
         if intent in merged:
@@ -350,46 +358,106 @@ _intent_router = _build_intent_router()
 _domain_router = _build_domain_router()
 
 
-def add_utterance_dynamically(text: str, intent: str) -> None:
+def _is_semantically_valid_for_intent(text: str, intent: str) -> bool:
+    """Pre-ingestion sanity filter checking whether a phrase makes sense for an intent."""
+    lowered = text.lower()
+
+    if intent == "open_application":
+        coding_signals = ["build", "create", "make", "write", "code", "develop", "website", "webpage", "html", "css", "script", "frontend", "backend", "api"]
+        if any(sig in lowered for sig in coding_signals):
+            return False
+        launch_signals = ["open", "launch", "start", "run", "bring up"]
+        return any(sig in lowered for sig in launch_signals)
+
+    if intent == "search_files":
+        search_signals = ["find", "search", "where", "locate", "look for", "list files", "file"]
+        return any(sig in lowered for sig in search_signals)
+
+    if intent in ("disk_usage_by_folder", "free_space_summary", "directory_size"):
+        storage_signals = ["disk", "space", "free", "used", "size", "storage", "folder", "directory", "gb", "mb", "capacity"]
+        return any(sig in lowered for sig in storage_signals)
+
+    if intent in ("top_memory_processes", "list_processes_detailed"):
+        proc_signals = ["memory", "ram", "process", "processes", "cpu", "eating", "usage", "pid", "threads", "consuming"]
+        return any(sig in lowered for sig in proc_signals)
+
+    return True
+
+
+def remove_utterance_dynamically(text: str, intent: str | None = None) -> bool:
+    """Purge a dynamically learned utterance from disk and hot-reload the router.
+
+    Used for self-healing when a user corrects an action or an execution fails.
+    Returns True if an entry was found and removed, False otherwise.
+    """
+    global _intent_router
+    if not text:
+        return False
+
+    data = _load_dynamic_utterances()
+    removed = False
+
+    targets = [intent] if intent and intent in data else list(data.keys())
+    for it in targets:
+        if it in data and text in data[it]:
+            data[it].remove(text)
+            removed = True
+            log.info("dynamic_utterance_pruned", extra={"text": text, "intent": it})
+            if not data[it]:
+                del data[it]
+
+    if removed:
+        _save_dynamic_utterances(data)
+        _intent_router = _build_intent_router()
+        log.info("intent_router_rebuilt_after_prune", extra={"text": text})
+
+    return removed
+
+
+def add_utterance_dynamically(text: str, intent: str) -> bool:
     """Persist a newly learned phrase and hot-reload the in-memory router.
 
     Quality guardrails
     ------------------
     - Prompts > MAX_DYNAMIC_WORDS words are skipped (narrative / multi-sentence).
-    - ``general_question`` is never persisted — it would teach the router to
-      give up on phrasing that might later be resolvable locally.
+    - ``general_question`` is never persisted.
+    - Semantic intent sanity check (_is_semantically_valid_for_intent) must pass.
     - Duplicates (already in static or dynamic lists) are silently skipped.
 
-    The in-memory ``_intent_router`` is rebuilt after a successful save so
-    the same phrase resolves locally on the very next call (< 5 ms).
+    Returns True if persisted, False if skipped/rejected.
     """
     global _intent_router
 
     if not text or not intent:
-        return
+        return False
 
     if intent == DEFAULT_INTENT:
         log.info("dynamic_learning_skipped_general_question", extra={"text": text})
-        return
+        return False
 
     word_count = len(text.split())
     if word_count > MAX_DYNAMIC_WORDS:
         log.info("dynamic_learning_skipped_too_long",
                  extra={"text": text, "word_count": word_count, "limit": MAX_DYNAMIC_WORDS})
-        return
+        return False
+
+    if not _is_semantically_valid_for_intent(text, intent):
+        log.info("dynamic_learning_skipped_semantic_sanity_check",
+                 extra={"text": text, "intent": intent})
+        return False
 
     # Check static list first
     static_phrases = INTENT_UTTERANCES.get(intent, [])
     if text in static_phrases:
         log.info("dynamic_learning_skipped_already_static", extra={"text": text, "intent": intent})
-        return
+        return False
 
     # Load, deduplicate, save
     data = _load_dynamic_utterances()
     existing = data.setdefault(intent, [])
     if text in existing:
         log.info("dynamic_learning_skipped_already_dynamic", extra={"text": text, "intent": intent})
-        return
+        return False
 
     existing.append(text)
     _save_dynamic_utterances(data)
@@ -399,31 +467,14 @@ def add_utterance_dynamically(text: str, intent: str) -> None:
     # Hot-reload in-memory router so the phrase works immediately
     _intent_router = _build_intent_router()
     log.info("intent_router_rebuilt", extra={"intent": intent})
+    return True
 
 
 # ── LLM escalation (Layer 2) ─────────────────────────────────────────────────
 
 def query_llm_with_tools(text: str) -> dict:
     """Layer 2: ask an LLM to identify the intent via structured tool-calling.
-
-    Uses ``llm_provider.generate_chat()`` with ``json_mode=True`` and a
-    system prompt that embeds the full ``ROUTER_TOOLS`` schema.  This avoids
-    needing native per-provider function-calling support (whose APIs differ
-    across Gemini, Groq, NVIDIA, etc.) and instead relies on the LLM's
-    instruction-following ability with a well-structured JSON schema prompt.
-
-    Returns
-    -------
-    dict with keys:
-        ``function`` — intent name string or None (for general_question),
-        ``confidence`` — always "high" when this path succeeds,
-        ``score``     — 1.0 (sentinel meaning "LLM decided"),
-        ``via_llm``   — True,
-        ``llm_args``  — any extra arguments the LLM extracted (may be empty).
-    On failure, returns general_question with ``via_llm=True``.
     """
-    # Import here to avoid circular imports at module level (llm_provider
-    # imports nothing from classifier).
     import llm_provider
     from classifier_tools import ROUTER_TOOLS, VALID_INTENT_NAMES
 
@@ -449,6 +500,13 @@ def query_llm_with_tools(text: str) -> dict:
         parsed = json.loads(raw)
         func_name = parsed.get("function_name", "").strip()
         llm_args = parsed.get("arguments", {})
+
+        # Guard against LLM misclassifying "build website/app" into open_application
+        if func_name == "open_application":
+            coding_signals = ["build", "create", "write", "code", "develop", "html", "css", "website", "webpage", "script", "frontend", "backend"]
+            if any(sig in text.lower() for sig in coding_signals):
+                log.info("llm_tool_call_corrected_app_to_coding", extra={"text": text, "raw": func_name})
+                func_name = "coding_task"
 
         if func_name not in VALID_INTENT_NAMES:
             log.info("llm_tool_call_unknown_intent",
@@ -587,15 +645,7 @@ def classify_intent(text: str) -> dict:
     log.info("intent_escalating_to_llm",
              extra={"text": text, "layer1_score": round(top_score, 3),
                     "layer1_intent": top_key})
-    llm_result = query_llm_with_tools(text)
-
-    # ── Dynamic feedback loop ────────────────────────────────────────────
-    if llm_result.get("via_llm") and llm_result.get("function"):
-        # Only persist concrete intents, not general_question (guarded inside
-        # add_utterance_dynamically as well, but being explicit here for clarity)
-        add_utterance_dynamically(text, llm_result["function"])
-
-    return llm_result
+    return query_llm_with_tools(text)
 
 
 def classify_domain(text: str) -> str:

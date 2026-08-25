@@ -261,6 +261,14 @@ instruction.
 13. **Fact retraction and deletion rejected by `_handle_correction`**:
    - **Issue**: When a user wanted to purely remove/retract a mistaken or false fact (e.g. "no you mistook that, remove that from memory"), `_handle_correction` rejected it because it required `corrected_fact` to not be null.
    - **Fix**: Updated `_handle_correction` to handle pure deletions/retractions when `corrected_fact` is null/None, deleting the old fact and confirming removal without needing a replacement fact.
+
+14. **Vector index poisoning via unverified dynamic learning**:
+   - **Issue**: `classify_intent` was saving LLM tool-calling classifications immediately before execution. If the LLM made a mistake (e.g. classifying "build a website using html css" as `open_application`), it saved that bad phrasing into `data/dynamic_utterances.json`, which caused future similar queries to immediately hit Layer 1 at 0.65 similarity and fail without reaching the LLM.
+   - **Fix**: Implemented the 3-pillar safety system:
+     (1) **Execution-verified ingestion**: Dynamic utterances are only persisted in `orchestrator.py` after verified execution success (e.g. `open_application` actually found and launched the binary, coding plan was approved, fact was stored).
+     (2) **Semantic sanity filters**: `_is_semantically_valid_for_intent` blocks impossible pairings (e.g. creation/coding verbs are strictly forbidden from being ingested into `open_application`).
+     (3) **Self-healing pruning**: `remove_utterance_dynamically` automatically purges previously ingested utterances if the user provides a correction on the following turn.
+
 ## Notable changes added during the Astro/ambiguity debugging pass
 
 ## Recent routing fix
