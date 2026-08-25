@@ -21,7 +21,7 @@ load_dotenv()
 
 log = get_logger("llm_provider")
 LOCAL_MODEL = "llama3.1:8b"
-REQUEST_TIMEOUT = 45
+REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "12"))
 MODEL_CACHE_TTL = 3600  # re-check live catalogs at most once an hour
 
 log.info("provider_mode_configured", extra={
@@ -32,8 +32,8 @@ log.info("provider_mode_configured", extra={
 # Dynamic candidate pools — first live match in provider's catalog wins
 GEMINI_CANDIDATES = [
     "gemini-2.5-flash",
-    "gemini-1.5-flash",
     "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-2.5-flash-lite",
 ]
 GROQ_CANDIDATES = [
@@ -51,13 +51,6 @@ OPENROUTER_CODING_CANDIDATES = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemma-2-9b-it:free",
     "qwen/qwen-2.5-72b-instruct:free",
-]
-# Dynamic candidate pools — first live match in provider's catalog wins
-GEMINI_CANDIDATES = [
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
 ]
 TASK_PROVIDERS: dict[str, list[str]] = {
     "coding": ["nvidia_nim", "openrouter", "groq", "local"],
@@ -358,6 +351,17 @@ _PROVIDER_FUNCS: dict[str, Callable[[list[dict[str, str]], bool], str]] = {
 }
 
 
+def strip_thinking_tags(text: str) -> str:
+    """Remove reasoning/thinking traces (<think>...</think>) from LLM outputs."""
+    if not isinstance(text, str):
+        return text
+    # Remove complete <think>...</think> blocks
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    # Remove unclosed opening/closing tags if any
+    cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool) -> dict[str, str]:
     try:
         answer = _local(messages, json_mode)
@@ -367,8 +371,9 @@ def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool) -> dict
             "All cloud providers failed and local Ollama is unavailable. "
             f"Check `ollama serve` and `ollama pull {LOCAL_MODEL}`."
         ) from error
+    cleaned_answer = strip_thinking_tags(answer) if not json_mode else answer
     log.info("provider_response", extra={"source": "local"})
-    return {"answer": answer, "source": "local"}
+    return {"answer": cleaned_answer, "source": "local"}
 
 
 def generate_chat(
@@ -407,8 +412,9 @@ def generate_chat(
             continue
         try:
             answer = provider(messages, json_mode)
+            cleaned_answer = strip_thinking_tags(answer) if not json_mode else answer
             log.info("provider_response", extra={"source": source})
-            return {"answer": answer, "source": source}
+            return {"answer": cleaned_answer, "source": source}
         except Exception as error:
             log.info("provider_failed", extra={"source": source, "error": _safe_error_text(error)})
 

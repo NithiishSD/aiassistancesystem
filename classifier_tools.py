@@ -98,6 +98,7 @@ ROUTER_TOOLS: list[dict] = [
         "description": (
             "User wants to launch, open, or start a specific pre-installed desktop application "
             "or program already on their system (e.g. calculator, browser, text editor, terminal). "
+            "NOT for asking questions about what apps exist, how many apps are installed, or what apps can be opened. "
             "NOT for building, creating, coding, or developing new websites, web apps, or programs. "
             "Examples: 'open VS Code', 'launch the browser', 'start VLC', "
             "'run the calculator app'."

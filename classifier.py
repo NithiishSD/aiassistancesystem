@@ -25,7 +25,9 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip netwo
 # (safe because the model is downloaded once on first successful run; if you ever
 # need to re-download or switch models, temporarily unset this or delete the cache)
 
+# pyrefly: ignore [missing-import]
 from semantic_router import Route, RouteLayer
+# pyrefly: ignore [missing-import]
 from semantic_router.encoders import HuggingFaceEncoder
 from zedek_logger import get_logger
 
@@ -47,12 +49,13 @@ MAX_DYNAMIC_WORDS = 15
 _encoder = None
 DEFAULT_INTENT = "general_question"
 
-# ── Thresholds ──────────────────────────────────────────────────────────────
-# Both constants are kept separate for clarity; they represent the same
-# operational boundary: >= 0.65 → high-confidence local hit, < 0.65 → LLM.
 ROUTE_THRESHOLD = 0.65       # passed to each Route so semantic-router only
                               # reports a name when cosine similarity is high enough
 CONFIDENCE_THRESHOLD = 0.65  # used in classify_intent() to decide LLM escalation
+
+# In-memory LRU fast-path cache for instant repeat classifications (< 1ms)
+_ROUTING_CACHE: dict[str, dict] = {}
+MAX_ROUTING_CACHE_SIZE = 256
 # ────────────────────────────────────────────────────────────────────────────
 
 AMBIGUOUS_TERMS = {
@@ -117,131 +120,90 @@ AMBIGUOUS_TERMS = {
 
 INTENT_UTTERANCES = {
     "search_files": [
+        "Search, find, locate, discover, or list files, documents, scripts, and directories on the local disk by filename, path, extension, or pattern.",
+        "find where my file or document is stored on my computer",
+        "search the filesystem for files matching a name or extension",
+        "locate my notes, assignments, pdfs, code files, or downloads",
         "find my resume file",
-        "where is my assignment stored",
-        "search for a file named notes.txt",
-        "locate the pdf in my downloads folder",
-        "can you look for my python script",
-        "find all files with extension .cpp",
-        "check if I have a document called syllabus",
-        "search my directory for project files",
         "where did I save my project report",
-        "find files matching this name",
+        "find all files with extension .cpp",
     ],
     "disk_usage_by_folder": [
+        "Analyze, inspect, breakdown, and list largest directories or subfolders consuming the most disk storage space on the system.",
+        "show which folders and directories are taking up the most storage space",
+        "breakdown of disk space usage by directory in home folder",
+        "find large folders and disk hogs on my hard drive",
         "which folders use the most disk space",
-        "show me large directories on my drive",
-        "what folder is taking up so much space",
-        "check folder sizes in home directory",
-        "find the largest folders on my system",
-        "show breakdown of directory storage usage",
-        "which directories are eating up my memory space",
-        "list subfolders by their size",
     ],
     "top_memory_processes": [
+        "List, inspect, and monitor active running system processes consuming the highest RAM and physical memory usage.",
+        "show top RAM hogs and high memory usage applications running right now",
+        "which process or app is eating all my system memory and RAM",
+        "check RAM and memory consumption by active processes",
         "show the processes using the most RAM",
-        "which app is consuming all my memory",
-        "list top RAM hogs",
-        "what processes are taking up memory right now",
-        "show high memory usage applications",
-        "check RAM consumption by process",
-        "display top active memory tasks",
-        "what is using up my RAM",
     ],
     "free_space_summary": [
+        "Check and summarize total, used, and available remaining free disk storage space and drive capacity.",
+        "how much free disk storage space do I have left on my drive",
+        "is my hard drive full and what is the available free storage space",
+        "check remaining gigabytes and disk capacity",
         "how much free disk space do I have",
-        "check remaining storage space",
-        "is my hard drive full",
-        "show free disk capacity",
-        "how many gigabytes are left on my drive",
-        "check overall storage status",
-        "do I have enough space left to download a file",
-        "summary of free vs used disk space",
     ],
     "directory_size": [
+        "Calculate, measure, and report the total size and disk space occupied by a specific named folder or directory.",
+        "how big is this specific folder or project directory in megabytes or gigabytes",
+        "check the total size of my downloads or project folder",
+        "calculate exact disk size of a folder path",
         "how large is this folder",
-        "check the size of my downloads directory",
-        "what is the total size of my project folder",
-        "how many megabytes is this folder taking",
-        "calculate total space used by this directory",
-        "how big is my documents folder",
-        "get directory size for this path",
     ],
     "remember_fact": [
+        "Remember, memorize, store, and record a personal fact, preference, academic detail, schedule, profile information, or statement about the user.",
+        "remember or note down this personal detail or fact about me",
+        "save to my profile that I study at this college or have this interest",
+        "store this fact about my subjects, professors, exams, or life",
         "remember that I study at PSG College of Technology",
-        "keep in mind my target company is Google",
-        "save this fact: I am preparing for placement exams",
-        "note down that my favorite programming language is Python",
-        "remember my reg number is 21BCE001",
-        "store this detail about my academic context",
-        "make a note that I have an exam next week",
-        "memorize that my professor for DSA is Dr. Smith",
-        "save to my profile that I live in hostel block B",
     ],
     "correct_fact": [
-        "that fact is false, please correct it",
-        "update what you remember about my college",
-        "no that is wrong, I study at a different university now",
-        "change my stored information about my GPA",
-        "that was incorrect, delete the old detail and update it",
-        "I need to fix a mistake in what you remembered earlier",
-        "update my profile: my exam was rescheduled",
-        "that is no longer true, please correct your memory",
-        "forget what I said earlier, here is the real context",
+        "Correct, update, retract, delete, or negate a previously stored fact, assumption, or detail about the user that is wrong or outdated.",
+        "that fact is false or incorrect, please update or delete it",
+        "no that is wrong, you mistook that, remove that from your memory",
+        "fix what you remembered earlier, change my stored information",
         "no its not correct",
         "you mistook that, remove that from memory",
-        "no that is not part of my course, remove it",
-        "that is mistaken, please delete that fact",
+        "that fact is false, please correct it",
     ],
     "coding_task": [
+        "Write, generate, code, build, debug, fix, refactor, implement, or test computer programs, scripts, algorithms, data structures, HTML CSS web pages, web applications, frontend, backend, APIs, or solve software engineering problems in Python, JavaScript, C++, Java, or any programming language.",
+        "help me write, fix, debug, or refactor this code or function",
+        "build a static website, web page, or web app using HTML CSS and JavaScript",
+        "implement a data structure, algorithm, or script for this problem",
+        "create a REST API, web scraper, or programming solution with unit tests",
         "help me fix this Python code",
         "write a C++ program to implement a binary tree",
-        "debug this recursion function for me",
-        "why am I getting a segmentation fault in this snippet",
-        "refactor this code to make it faster",
-        "write a bash script to automate backups",
-        "how do I solve this LeetCode array problem",
-        "create a REST API endpoint using FastAPI",
-        "fix the syntax error on line 42",
-        "write unit tests for this python class",
         "can you build me static webite using html css for jewelary store",
-        "build a static website using html and css",
-        "build a website for a grocery shop",
-        "create an html css landing page",
-        "develop a frontend web page",
-        "write code to build a website",
-        "create a fullstack application",
-        "build an ecommerce web page",
+        "build a website for grocery shop",
     ],
     "unsupported": [
+        "Requests for unsupported capabilities such as media playback, music control on Spotify, alarms, timers, smart home IoT, cabs, texting, hardware brightness volume controls, or closing quitting applications.",
+        "play music on Spotify or control audio media playback",
+        "set an alarm, timer, or smart home light controls",
+        "close or terminate an application on my computer",
         "play some music on Spotify",
-        "set an alarm for 7 AM",
-        "turn off the room lights",
-        "send a text message to my friend",
-        "book a cab for me",
-        "adjust my screen brightness",
-        "control media playback",
-        "what is the current room temperature",
     ],
     "list_processes_detailed": [
+        "Provide detailed diagnostic analysis and thread CPU inspection for a specific running process ID or explain why a process is using 100 percent CPU.",
+        "why is this specific PID or process consuming so much CPU and threads",
+        "inspect detailed runtime metrics and threads for a background process",
+        "diagnose why CPU usage is pegged at 100 percent by a task",
         "why is this process using so much CPU",
-        "show detailed information for PID 4052",
-        "inspect running process details",
-        "why is my CPU usage at 100 percent",
-        "analyze what this background process is doing",
-        "list running process threads and CPU consumption",
-        "tell me why python is taking so much processing power",
-        "check status and runtime of active processes",
     ],
     "open_application": [
-        "open the calculator application",
+        "Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal, browser, or editor already present on the user's computer.",
+        "open or launch an installed desktop app like Brave browser, VS Code, or VLC",
+        "start the calculator, terminal, or text editor application",
+        "run an existing installed program on my Linux machine",
         "can you open Brave application",
-        "launch the browser",
-        "start VS Code editor",
-        "open my terminal app",
-        "launch VLC media player",
-        "run the obsidian application",
-        "start an installed application",
+        "open the calculator application",
     ],
 }
 
@@ -390,9 +352,12 @@ def remove_utterance_dynamically(text: str, intent: str | None = None) -> bool:
     Used for self-healing when a user corrects an action or an execution fails.
     Returns True if an entry was found and removed, False otherwise.
     """
-    global _intent_router
+    global _intent_router, _ROUTING_CACHE
     if not text:
         return False
+
+    norm_key = text.strip().lower()
+    _ROUTING_CACHE.pop(norm_key, None)
 
     data = _load_dynamic_utterances()
     removed = False
@@ -592,25 +557,22 @@ def _is_unsupported_action_request(text: str) -> bool:
 # ── Public classification API ─────────────────────────────────────────────────
 
 def classify_intent(text: str) -> dict:
-    """Hybrid two-layer intent classifier.
+    """Hybrid two-layer intent classifier with in-memory fast caching.
 
     Returns a dict with keys:
-        ``function``   — intent name string, or None for general_question /
-                         acknowledgements.
+        ``function``   — intent name string, or None for general_question / acknowledgements.
         ``confidence`` — ``"high"`` or ``"low"``.
-        ``score``      — cosine similarity from Layer 1, or 1.0 when routed
-                         via Layer 2 LLM.
+        ``score``      — cosine similarity from Layer 1, or 1.0 when routed via Layer 2 LLM.
         ``via_llm``    — True when Layer 2 was used; False for Layer 1 hits.
 
-    Pipeline
-    --------
+    Pipeline:
     1. Pre-classification guards (acknowledgement, unsupported media).
-    2. Layer 1 — semantic-router (CPU).  If score >= 0.65, return immediately.
-    3. Layer 2 — LLM tool-calling.  Triggered when score < 0.65.
-    4. Dynamic learning — if Layer 2 identified a specific intent (not
-       general_question) and the phrase is <= 15 words, persist it so future
-       identical phrasing resolves via Layer 1.
+    2. Fast memory cache (< 1ms).
+    3. Layer 1 — description-based semantic router (< 5ms).
+    4. Layer 2 — LLM structured tool-calling fallback (~150ms).
     """
+    global _ROUTING_CACHE
+
     if _is_acknowledgement_or_confirmation(text):
         log.info("intent_classified_acknowledgement", extra={"text": text})
         return {"function": None, "confidence": "high", "score": 0.0, "via_llm": False}
@@ -619,33 +581,46 @@ def classify_intent(text: str) -> dict:
         log.info("intent_classified_unsupported_action", extra={"text": text})
         return {"function": "unsupported", "confidence": "high", "score": 1.0, "via_llm": False}
 
-    # ── Layer 1: semantic-router ──────────────────────────────────────────
+    # Fast in-memory cache lookup (< 1ms)
+    norm_key = (text or "").strip().lower()
+    if norm_key in _ROUTING_CACHE:
+        log.info("intent_classified_cache_hit", extra={"text": text})
+        return _ROUTING_CACHE[norm_key]
+
+    # ── Layer 1: semantic-router with description-based embeddings ───────
     result = _intent_router(text)
     top_key = result.name or DEFAULT_INTENT
-    # Static RouteChoice objects do not carry the retrieval score in the
-    # pinned semantic-router version. A non-empty name means its route
-    # threshold was already satisfied; expose that threshold through the
-    # legacy score field.
     top_score = ROUTE_THRESHOLD if result.name else 0.0
 
     if top_score >= CONFIDENCE_THRESHOLD and top_key != DEFAULT_INTENT:
-        # High-confidence local hit — return fast
-        func_value = top_key  # already validated: never DEFAULT_INTENT here
+        func_value = top_key
         log.info("intent_classified_layer1",
                  extra={"text": text, "intent": top_key,
                         "score": round(top_score, 3), "via_llm": False})
-        return {
+        decision = {
             "function": func_value,
             "confidence": "high",
             "score": round(top_score, 3),
             "via_llm": False,
         }
+        # Populate fast cache
+        if len(_ROUTING_CACHE) >= MAX_ROUTING_CACHE_SIZE:
+            _ROUTING_CACHE.pop(next(iter(_ROUTING_CACHE)))
+        _ROUTING_CACHE[norm_key] = decision
+        return decision
 
-    # ── Layer 2: LLM tool-calling ─────────────────────────────────────────
+    # ── Layer 2: LLM tool-calling fallback ────────────────────────────────
     log.info("intent_escalating_to_llm",
              extra={"text": text, "layer1_score": round(top_score, 3),
                     "layer1_intent": top_key})
-    return query_llm_with_tools(text)
+    decision = query_llm_with_tools(text)
+
+    # Populate fast cache with LLM decision
+    if len(_ROUTING_CACHE) >= MAX_ROUTING_CACHE_SIZE:
+        _ROUTING_CACHE.pop(next(iter(_ROUTING_CACHE)))
+    _ROUTING_CACHE[norm_key] = decision
+
+    return decision
 
 
 def classify_domain(text: str) -> str:

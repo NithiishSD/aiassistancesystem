@@ -239,6 +239,31 @@ def route_request(user_input: str) -> dict:
 def _extract_application_name(user_input: str) -> str:
     """Extract the requested application without relying on an LLM."""
     text = re.sub(r"\s+", " ", (user_input or "").strip())
+    lowered = text.lower()
+
+    # If the user input looks like an informational question, don't treat the sentence as a launch target
+    if any(lowered.startswith(q) for q in ["what", "how", "why", "which", "where", "who", "can you tell", "list"]):
+        match = re.search(
+            r"\b(?:open|launch|start|run)\s+(?:the\s+)?(?:application\s+|app\s+)?([a-zA-Z0-9_\-\.\+]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            candidate = match.group(1).strip(" .,!?")
+            if candidate.lower() not in ("it", "app", "application", "program", "this", "them"):
+                return candidate
+        return ""
+
+    match = re.search(
+        r"(?:open|launch|start|run)\s+(?:the\s+)?(?:application\s+|app\s+)?([a-zA-Z0-9_\-\.\+]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        candidate = match.group(1).strip(" .,!?")
+        if candidate.lower() not in ("it", "app", "application", "program", "this", "them"):
+            return candidate
+
     text = re.sub(
         r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|then\s+)?"
         r"(?:open|launch|start)\s+",
@@ -247,7 +272,10 @@ def _extract_application_name(user_input: str) -> str:
         flags=re.IGNORECASE,
     )
     text = re.sub(r"\s+(?:application|app|program)$", "", text, flags=re.IGNORECASE)
-    return text.strip(" .,!?")
+    cleaned = text.strip(" .,!?")
+    if not cleaned or cleaned.lower() in ("it", "app", "application", "program", "this", "them") or len(cleaned.split()) > 4:
+        return ""
+    return cleaned
 
 
 def _extract_args(func_name: str, user_input: str) -> dict:
@@ -621,6 +649,12 @@ def execute(decision: dict) -> str:
 
     args = decision.get("args", {})
     args = _coerce_arg_types(func_name, args)
+
+    if func_name == "open_application":
+        app_name = (args.get("app_name") or "").strip()
+        if not app_name:
+            log.info("open_application_missing_app_name", extra={"user_input": decision.get("_original_input", "")})
+            return "Which application would you like me to open? (e.g. Brave, VS Code, Calculator)"
 
     gate_decision = gate(func_name, args, user_input=decision.get("_original_input", ""))
 

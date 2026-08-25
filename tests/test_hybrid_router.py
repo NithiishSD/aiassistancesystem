@@ -323,3 +323,32 @@ class TestExistingRegressions:
         import classifier as clf
         result = clf.classify_intent("close brave application")
         assert result["function"] == "unsupported"
+
+    def test_meta_question_about_apps_not_open_application_layer1(self):
+        """Questions asking what apps exist should not falsely match open_application on Layer 1."""
+        with patch("classifier.query_llm_with_tools") as mock_llm:
+            mock_llm.return_value = {
+                "function": None,
+                "confidence": "high",
+                "score": 1.0,
+                "via_llm": True,
+                "llm_args": {},
+            }
+            import classifier as clf
+            result = clf.classify_intent("what are all application in this system you can open it")
+            # Must either escalate to LLM or not be open_application on Layer 1
+            if not result.get("via_llm"):
+                assert result["function"] != "open_application"
+
+    def test_extract_application_name_filters_meta_questions(self):
+        import orchestrator
+        extracted = orchestrator._extract_application_name("what are all application in this system you can open it")
+        assert extracted == ""
+        valid_extracted = orchestrator._extract_application_name("can you open Brave application")
+        assert valid_extracted.lower() == "brave"
+
+    def test_strip_thinking_tags(self):
+        from llm_provider import strip_thinking_tags
+        raw = "<think>\nThinking about the user's question...\nThis is private.\n</think>Here is the actual answer."
+        assert strip_thinking_tags(raw) == "Here is the actual answer."
+

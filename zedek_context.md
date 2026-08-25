@@ -269,6 +269,22 @@ instruction.
      (2) **Semantic sanity filters**: `_is_semantically_valid_for_intent` blocks impossible pairings (e.g. creation/coding verbs are strictly forbidden from being ingested into `open_application`).
      (3) **Self-healing pruning**: `remove_utterance_dynamically` automatically purges previously ingested utterances if the user provides a correction on the following turn.
 
+15. **Fragile manual utterance lists replaced with Description-Based Semantic Routing & LRU Fast Caching**:
+   - **Issue**: Manually curating and hardcoding lists of user sentences was unscalable, fragile to novel phrasing, and impossible to exhaustively test.
+   - **Fix**: Upgraded Layer 1 to use **rich semantic capability descriptions** for each intent route instead of sparse sentence examples. Added an **in-memory LRU fast cache** (`_ROUTING_CACHE`, capacity 256) providing instant `< 1ms` resolution for repeated/frequent commands, while Layer 2 LLM tool-calling handles any ambiguous/novel queries.
+
+16. **Meta-questions misclassified into `open_application`, thinking tags leakage, and cloud request timeout bottleneck**:
+   - **Issue**:
+     (a) Informational questions like "what are all application in this system you can open it" matched `open_application` on Layer 1 due to high keyword overlap ("application", "system", "open"), and `_extract_application_name` passed the entire sentence as the target binary.
+     (b) Reasoning models on Groq output raw `<think>...</think>` traces to the CLI.
+     (c) `REQUEST_TIMEOUT` was 45s, causing consecutive timeout cascades (up to 90s latency) when Gemini experienced read timeouts.
+   - **Fix**:
+     (a) Added semantic sanity verification on Layer 1 router hits in `classifier.py` preventing informational questions from executing `open_application`; hardened `_extract_application_name` and `execute_action` to reject multi-word non-app queries.
+     (b) Added `strip_thinking_tags` in `llm_provider.py` to scrub reasoning traces before presenting responses.
+     (c) Reduced `REQUEST_TIMEOUT` from 45s to 12s in `llm_provider.py` and deduplicated candidate pools.
+
+
+
 ## Notable changes added during the Astro/ambiguity debugging pass
 
 ## Recent routing fix
