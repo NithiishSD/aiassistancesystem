@@ -29,3 +29,7 @@
 {"levelname": "INFO", "message": "routing_started", "taskName": null, "user_input": "find the file name intern_resume", "timestamp": "2026-08-22 15:53:22,721", "module": "orchestrator"}
 {"levelname": "INFO", "message": "routing_decision", "taskName": null, "decision": {"function": "search_files", "args": {"query": "intern_resume"}}, "timestamp": "2026-08-22 15:53:23,722", "module": "orchestrator"}
 {"levelname": "INFO", "message": "execution_success", "taskName": null, "function": "search_files", "call_args": {"query": "intern_resume"}, "timestamp": "2026-08-22 15:53:24,482", "module": "orchestrator"}
+{"levelname": "INFO", "message": "session_flush_nothing_worth_storing", "taskName": null, "turns_reviewed": 12, "timestamp": "2026-08-25 20:15:18,177", "module": "orchestrator"}
+{"levelname": "INFO", "message": "routing_started", "taskName": null, "user_input": "can you build me a website for grocery store", "timestamp": "2026-08-25 20:17:27,293", "module": "orchestrator"}
+{"levelname": "INFO", "message": "routing_decision", "taskName": null, "decision": {"function": "open_application", "domain": "personal", "confidence": "high", "score": 0.65, "via_llm": false}, "via_llm": false, "timestamp": "2026-08-25 20:17:27,306", "module": "orchestrator"}
+{"levelname": "INFO", "message": "execution_success", "taskName": null, "function": "open_application", "call_args": {"app_name": "can you build me a website for grocery store"}, "timestamp": "2026-08-25 20:17:27,310", "module": "orchestrator"}

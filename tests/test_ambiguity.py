@@ -48,3 +48,20 @@ def test_meta_question_about_astro_is_not_ambiguity_request():
     question = "you confused astro with so many words like that what are other words you would get confused"
 
     assert should_ask_ambiguous_term_question(question) is False
+
+
+def test_correction_not_blocked_by_ambiguous_term():
+    text = "no you mistook astro frontend framework is not part of datastructure course and also there is no course of datastructure that i am currently learning so remove that from your memory"
+    assert should_ask_ambiguous_term_question(text) is False
+
+
+def test_session_flush_preserves_recent_turns(monkeypatch):
+    import orchestrator
+    orchestrator.SESSION_HISTORY = [
+        {"role": "user", "content": f"msg {i}"} for i in range(12)
+    ]
+    monkeypatch.setattr("orchestrator.ollama.chat", lambda **kwargs: {"message": {"content": "NONE"}})
+    orchestrator.summarize_and_flush_session(keep_recent=4)
+    assert len(orchestrator.SESSION_HISTORY) == 4
+    assert orchestrator.SESSION_HISTORY[-1]["content"] == "msg 11"
+

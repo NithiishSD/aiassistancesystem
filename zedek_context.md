@@ -249,6 +249,18 @@ instruction.
 10. **Static Vector Router Misrouting & Missed Phrasings**:
    - **Issue**: Static seed utterances in `semantic-router` failed on novel phrasing or slang, forcing requests into `general_question` or incorrect routes. Hardcoded updates were inefficient.
    - **Fix**: Implemented Strategy 2 (Hybrid Cascading) with Tool Calling in `llm_provider.py` as Layer 2. Added automatic vector ingestion (`add_utterance_dynamically`) to persist LLM-routed queries locally in `data/dynamic_utterances.json`.
+
+11. **Mid-session buffer flush wiping active context (0 session turns used)**:
+   - **Issue**: When `SESSION_HISTORY` reached 11 turns, `summarize_and_flush_session` cleared the entire history to `[]`. The very next turn (e.g. user answering "no its not correct" to a question Zedek asked) had 0 context turns, causing Zedek to lose all track of the active dialogue.
+   - **Fix**: Added `keep_recent=4` so mid-session buffer flushes keep a rolling window of the last 4 turns in RAM, ensuring dialogue continuity is never lost. Full clearing only occurs on session exit (`quit`).
+
+12. **Multi-fact statements conflated into a single malformed fact**:
+   - **Issue**: Statements containing multiple distinct details (e.g. "software system is the program by amcs department and ml java are the subjects") were squashed into `User's subject: ML Java, Software System` because the prompt only permitted one line.
+   - **Fix**: Updated `canonicalize_fact` to parse and output multiple distinct standardized lines (`list[str]`) for distinct attributes, storing each one cleanly in memory.
+
+13. **Fact retraction and deletion rejected by `_handle_correction`**:
+   - **Issue**: When a user wanted to purely remove/retract a mistaken or false fact (e.g. "no you mistook that, remove that from memory"), `_handle_correction` rejected it because it required `corrected_fact` to not be null.
+   - **Fix**: Updated `_handle_correction` to handle pure deletions/retractions when `corrected_fact` is null/None, deleting the old fact and confirming removal without needing a replacement fact.
 ## Notable changes added during the Astro/ambiguity debugging pass
 
 ## Recent routing fix

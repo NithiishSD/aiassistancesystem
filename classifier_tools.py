@@ -65,10 +65,10 @@ ROUTER_TOOLS: list[dict] = [
     {
         "name": "correct_fact",
         "description": (
-            "User wants to update, correct, or retract a previously stored fact "
-            "that is now wrong or outdated. "
-            "Examples: 'that college info is wrong, update it', "
-            "'no that was incorrect, here is the real value', 'fix what you stored earlier'."
+            "User wants to update, correct, negate, or retract/delete a previously stored fact "
+            "that is wrong, mistaken, or outdated. "
+            "Examples: 'that college info is wrong, update it', 'no its not correct', "
+            "'no you mistook that, remove it from memory', 'that was incorrect, here is the real value'."
         ),
     },
     {

@@ -37,13 +37,15 @@ SESSION_HISTORY: list[dict] = []
 MAX_SESSION_TURNS = 10  # last 10 messages (~5 exchanges)
 
 
-def summarize_and_flush_session(domain: str = "personal") -> None:
+def summarize_and_flush_session(domain: str = "personal", keep_recent: int = 0) -> None:
     """
     Reviews the current session buffer, extracts only what's genuinely worth
     remembering long-term (new facts, decisions, preferences), and stores
     ONLY that distilled summary to ChromaDB — not the raw conversation.
     Called when the session buffer fills up, or when the session ends.
-    Clears SESSION_HISTORY afterward.
+    
+    If keep_recent > 0, keeps the latest N turns in SESSION_HISTORY so
+    conversational continuity is not broken mid-session.
     """
     global SESSION_HISTORY
 
@@ -63,25 +65,31 @@ If nothing is worth remembering, respond with exactly: NONE
 Transcript:
 {transcript}"""
 
-    response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
-    extracted = response["message"]["content"].strip()
+    try:
+        response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
+        extracted = response["message"]["content"].strip()
 
-    if extracted.upper() == "NONE" or not extracted:
-        log.info("session_flush_nothing_worth_storing", extra={"turns_reviewed": len(SESSION_HISTORY)})
-    else:
-        facts = [line.strip() for line in extracted.split("\n") if line.strip()]
-        for fact in facts:
-            memory.store(fact, domain=domain, content_type="fact")
-        log.info("session_flush_stored", extra={"facts_stored": len(facts), "turns_reviewed": len(SESSION_HISTORY)})
+        if extracted.upper() == "NONE" or not extracted:
+            log.info("session_flush_nothing_worth_storing", extra={"turns_reviewed": len(SESSION_HISTORY)})
+        else:
+            facts = [line.strip() for line in extracted.split("\n") if line.strip() and line.strip().startswith("User's")]
+            for fact in facts:
+                memory.store(fact, domain=domain, content_type="fact")
+            log.info("session_flush_stored", extra={"facts_stored": len(facts), "turns_reviewed": len(SESSION_HISTORY)})
+    except Exception as err:
+        log.info("session_flush_error", extra={"error": str(err)})
 
-    SESSION_HISTORY = []
+    if keep_recent > 0 and len(SESSION_HISTORY) > keep_recent:
+        SESSION_HISTORY = SESSION_HISTORY[-keep_recent:]
+    elif keep_recent == 0:
+        SESSION_HISTORY = []
 
 
 def _add_to_session(role: str, content: str) -> None:
     SESSION_HISTORY.append({"role": role, "content": content})
     if len(SESSION_HISTORY) > MAX_SESSION_TURNS:
         log.info("session_buffer_full_flushing", extra={"turns": len(SESSION_HISTORY)})
-        summarize_and_flush_session()
+        summarize_and_flush_session(keep_recent=4)
 
 def tone_for_prompt(user_input: str) -> str:
     """Map user wording into a matching conversational tone."""
@@ -126,8 +134,8 @@ def should_ask_ambiguous_term_question(user_input: str, recent_user_turns: list[
         return False
 
     # If the prompt is a correction, statement, or highly detailed, do NOT block it with ambiguity questions
-    correction_signals = ["no", "incorrect", "wrong", "mistake", "remove", "delete", "not part of", "correct"]
-    if any(sig in text.lower().split() for sig in correction_signals):
+    correction_signals = ["no", "incorrect", "wrong", "mistake", "mistook", "remove", "delete", "not part of", "correct", "not true", "false"]
+    if any(sig in text.lower() for sig in correction_signals):
         return False
 
     # If already specified by context in current turn
@@ -266,27 +274,35 @@ Request: {user_input}"""
 
 def _handle_correction(raw_text: str, domain: str) -> str:
     """
-    Handles a fact correction/retraction. Finds the most likely stored fact
-    this contradicts, deletes it, stores the corrected version instead of
-    just adding a new fact on top of the stale one.
+    Handles a fact correction or retraction/deletion.
+    Finds candidate stored facts, and either updates the fact with a new value
+    or deletes/retracts it if the user indicated it was false or requested removal.
     """
-    candidates = memory.retrieve(raw_text, domain=domain, content_type="fact", top_k=3)
+    last_q = _last_assistant_question()
+    search_query = f"{last_q} {raw_text}".strip() if last_q and len(raw_text.split()) <= 6 else raw_text
+    candidates = memory.retrieve(search_query, domain=domain, content_type="fact", top_k=4)
 
     if not candidates:
-        log.info("correction_no_matching_fact", extra={"raw_text": raw_text})
-        return "I don't have a stored fact that matches what you're correcting — nothing to update."
+        log.info("correction_no_matching_fact", extra={"raw_text": raw_text, "query": search_query})
+        return "I see you're correcting something, but I don't have a stored fact that matches what you're correcting."
 
     candidate_list = "\n".join(f"{i}: {c['text']}" for i, c in enumerate(candidates))
-    prompt = f"""The user is correcting previously stored information. Here are the
-candidate stored facts that might be what they're correcting:
+    recent_context = f"\nRecent conversation context: Zedek asked: \"{last_q}\"" if last_q else ""
 
+    prompt = f"""The user is correcting, retracting, or removing previously stored information.{recent_context}
+
+Here are the candidate stored facts in memory:
 {candidate_list}
 
-The user's correction: "{raw_text}"
+The user's statement: "{raw_text}"
 
-Which numbered fact (if any) does this correction contradict/replace? Respond with ONLY
-a JSON object: {{"index": <number or null>, "corrected_fact": "User's <attribute>: <new value>" or null}}
-If none of the candidates are actually related to this correction, use null for both fields."""
+Determine which candidate fact (if any) this statement contradicts, negates, or wants removed.
+- If the user wants to update the fact with a new value, provide the index and the updated fact.
+- If the user wants to remove/delete the fact because it is false or mistaken (without replacing it), provide the index and set "corrected_fact": null.
+- If none of the candidates match, set both to null.
+
+Respond ONLY with valid JSON:
+{{"index": <number 0-{len(candidates)-1} or null>, "corrected_fact": "User's <attribute>: <new value>" or null}}"""
 
     llm_result = llm_provider.generate_chat(
         [{"role": "user", "content": prompt}],
@@ -295,21 +311,26 @@ If none of the candidates are actually related to this correction, use null for 
     )
     try:
         result = json.loads(llm_result["answer"])
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         result = {"index": None, "corrected_fact": None}
 
     index = result.get("index")
     corrected_fact = result.get("corrected_fact")
 
-    if index is None or corrected_fact is None:
+    if index is None or not isinstance(index, int) or index < 0 or index >= len(candidates):
         log.info("correction_no_confident_match", extra={"raw_text": raw_text, "candidates": candidate_list})
-        return "I see you're correcting something, but I couldn't confidently match it to a stored fact — could you be more specific?"
+        return "I understand you're correcting that, but I couldn't confidently pinpoint which stored fact to update. Could you mention the specific detail?"
 
     old_fact = candidates[index]
     memory.delete_by_ids([old_fact["id"]], domain=domain)
-    memory.store(corrected_fact, domain=domain, content_type="fact")
-    log.info("fact_corrected", extra={"old_fact": old_fact["text"], "new_fact": corrected_fact})
-    return f"Got it — I've updated that. (Was: \"{old_fact['text']}\")"
+
+    if corrected_fact and str(corrected_fact).strip().lower() not in ("null", "none"):
+        memory.store(str(corrected_fact).strip(), domain=domain, content_type="fact")
+        log.info("fact_corrected", extra={"old_fact": old_fact["text"], "new_fact": corrected_fact})
+        return f"Got it — I've updated that in memory. (Updated: \"{old_fact['text']}\" ➔ \"{corrected_fact}\")"
+    else:
+        log.info("fact_retracted", extra={"old_fact": old_fact["text"]})
+        return f"Got it — I've removed that from memory. (Removed: \"{old_fact['text']}\")"
 
 
 def _acknowledge_fact(raw_text: str) -> str:
@@ -331,51 +352,57 @@ details the user didn't actually say — only react to what's explicitly stated.
     return result["answer"].strip()
 
 
-def canonicalize_fact(raw_text: str) -> str | None:
+def canonicalize_fact(raw_text: str) -> list[str]:
     """
-    Rewrites a raw user statement into a clean, standardized fact before
-    storage. This reduces retrieval mismatch caused by inconsistent phrasing
-    ("I study at X" vs "my college is X" vs "currently attending X") by
-    ensuring everything stored follows the same structure and wording style,
-    rather than relying purely on the embedding model to smooth over
-    inconsistent raw sentences.
+    Rewrites a raw user statement into clean, standardized fact(s) before storage.
+    Supports extracting multiple distinct facts if the statement contains multiple details
+    (e.g., program + department + subjects).
 
-    Returns None if no real fact/value could be extracted (guards against
-    the model fabricating a placeholder like "Unknown" when the router
-    incorrectly classified a question as a fact statement).
+    Returns a list of standardized fact strings ["User's <attr>: <val>", ...],
+    or [] if no real facts could be extracted.
     """
-    prompt = f"""Rewrite the following statement as a single, clean, standardized fact
-about the user. Remove filler words. Use this exact format:
+    prompt = f"""Rewrite the following user statement into clean, standardized facts.
+If the statement contains multiple distinct facts, write EACH fact on its own line.
+Use this exact format for every line:
 
-"User's <attribute>: <value>"
+User's <attribute>: <value>
 
 Examples:
-"okay so basically i study at psg college of technology" -> "User's college: PSG College of Technology"
-"i really like python a lot" -> "User's favorite programming language: Python"
+"okay so basically i study at psg college of technology" ->
+User's college: PSG College of Technology
 
-If the statement does NOT actually contain a concrete fact about the user (e.g. it's a
-question, or has no real information to extract), respond with exactly: NO_FACT
+"see software system is the program provided by the amcs department and ml java are the subjects i study" ->
+User's program: Software Systems
+User's department: AMCS
+User's subjects: Machine Learning, Java
+
+"i really like python a lot" ->
+User's favorite programming language: Python
+
+If the statement does NOT contain any real, concrete fact about the user (e.g. it is a question,
+a greeting, or routine banter), respond with exactly: NO_FACT
 
 Statement: {raw_text}
 
-Respond with ONLY the standardized fact, or NO_FACT, nothing else."""
+Respond with ONLY the standardized fact line(s), or NO_FACT, nothing else."""
 
     result = llm_provider.generate_chat(
         [{"role": "user", "content": prompt}],
         task="fact_handling",
     )
-    canonical = result["answer"].strip()
-    canonical = canonical.strip('"').strip("'")  # strip stray wrapping quotes the model sometimes adds
-
-    # Guard: reject placeholder/empty extractions even if the model didn't
-    # correctly say NO_FACT — catches "Unknown", "N/A", "Not specified", etc.
+    raw_answer = result["answer"].strip()
     rejected_markers = ["no_fact", "unknown", "n/a", "not specified", "not provided", "not given"]
-    if any(marker in canonical.lower() for marker in rejected_markers):
-        log.info("fact_extraction_rejected", extra={"raw": raw_text, "attempted": canonical})
-        return None
 
-    log.info("fact_canonicalized", extra={"raw": raw_text, "canonical": canonical})
-    return canonical
+    facts: list[str] = []
+    for line in raw_answer.splitlines():
+        line = line.strip().strip('"').strip("'")
+        if not line or any(marker in line.lower() for marker in rejected_markers):
+            continue
+        if line.startswith("User's ") and ":" in line:
+            facts.append(line)
+
+    log.info("fact_canonicalized", extra={"raw": raw_text, "facts_extracted": len(facts), "facts": facts})
+    return facts
 
 
 def _last_assistant_question() -> str | None:
@@ -551,14 +578,15 @@ def execute(decision: dict) -> str:
 
     if func_name == "remember_fact":
         fact_text = decision.get("_original_input", "")
-        canonical_fact = canonicalize_fact(fact_text)
-        if canonical_fact is None:
+        canonical_facts = canonicalize_fact(fact_text)
+        if not canonical_facts:
             # Router likely misclassified a question/non-fact as remember_fact.
             # Don't store garbage — fall back to answering it as a question instead.
             log.info("remember_fact_fallback_to_qa", extra={"original_input": fact_text})
             return answer_general_question(fact_text, domain)
-        memory.store(canonical_fact, domain=domain, content_type="fact")
-        log.info("fact_remembered", extra={"domain": domain, "text": canonical_fact})
+        for c_fact in canonical_facts:
+            memory.store(c_fact, domain=domain, content_type="fact")
+            log.info("fact_remembered", extra={"domain": domain, "text": c_fact})
         return _acknowledge_fact(fact_text)
 
     if func_name == "correct_fact":

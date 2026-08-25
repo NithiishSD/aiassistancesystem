@@ -188,6 +188,10 @@ INTENT_UTTERANCES = {
         "update my profile: my exam was rescheduled",
         "that is no longer true, please correct your memory",
         "forget what I said earlier, here is the real context",
+        "no its not correct",
+        "you mistook that, remove that from memory",
+        "no that is not part of my course, remove it",
+        "that is mistaken, please delete that fact",
     ],
     "coding_task": [
         "help me fix this Python code",
