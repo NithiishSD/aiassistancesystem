@@ -464,6 +464,7 @@ def execute(decision: dict) -> str:
     original_input = decision.get("_original_input", "")
 
     if func_name == "coding_task":
+        # ── Checkpoint 1: Tier gate ──────────────────────────────────────
         coding_gate = gate("coding_task", {}, user_input=original_input)
         if coding_gate["action"] == "blocked":
             return coding_gate["message"]
@@ -474,12 +475,68 @@ def execute(decision: dict) -> str:
                 return "Cancelled."
             log.info("coding_task_confirmation_granted", extra={})
 
+        # ── Checkpoint 2: Plan approval ──────────────────────────────────
+        plan = CODING_SPECIALIST.plan_task(original_input)
+        print("\n" + "=" * 60)
+        print("📋 CODING PLAN")
+        print("=" * 60)
+        print(f"Goal: {plan.get('goal', 'N/A')}")
+        print(f"\nSteps:")
+        for i, step in enumerate(plan.get('steps', []), 1):
+            print(f"  {i}. {step}")
+        if plan.get('files_to_create'):
+            print(f"\nNew files: {', '.join(plan['files_to_create'])}")
+        if plan.get('files_to_modify'):
+            print(f"Modify: {', '.join(plan['files_to_modify'])}")
+        if plan.get('risks'):
+            print(f"\n⚠️  Risks: {', '.join(plan['risks'])}")
+        print(f"\nConstraints: {', '.join(plan.get('constraints', []))}")
+        print("=" * 60)
+        print("Approve this plan? (y/n)")
+        if input("> ").strip().lower() != "y":
+            log.info("coding_plan_rejected", extra={"goal": plan.get("goal", "")})
+            return "Plan rejected. No code was generated or modified."
+        log.info("coding_plan_approved", extra={"goal": plan.get("goal", "")})
+
+        # ── Execute: patch → test → verify ───────────────────────────────
         result = CODING_SPECIALIST.implement_and_verify(original_input)
         log.info("coding_task_verified", extra={
             "status": result["status"],
             "attempts": result["attempts"],
         })
-        return format_coding_result(result)
+
+        # Show result summary
+        summary = format_coding_result(result)
+        print(summary)
+
+        # ── Checkpoint 3: File application approval ──────────────────────
+        if result["status"] in ("passed", "unverified") and result.get("patch"):
+            review = result.get("review", {})
+            review_note = ""
+            if review.get("approved"):
+                review_note = f" (LLM reviewer approved: {review.get('summary', '')})"
+            elif review:
+                review_note = f" (LLM reviewer flagged issues: {', '.join(review.get('issues', []))})"
+
+            print(f"\n{'=' * 60}")
+            print(f"💾 APPLY CHANGES?{review_note}")
+            print(f"Target: {result['patch'].get('target_file', 'N/A')}")
+            print(f"{'=' * 60}")
+            print("Write this code to the file? (y/n)")
+            if input("> ").strip().lower() == "y":
+                apply_result = CODING_SPECIALIST.apply_patch(result["patch"])
+                if apply_result["applied"]:
+                    backup_note = f" Backup at: {apply_result['backup']}" if apply_result.get("backup") else ""
+                    log.info("coding_patch_applied", extra=apply_result)
+                    return f"{summary}\n\n✅ Changes applied to {apply_result['file']} ({apply_result['lines_written']} lines).{backup_note}"
+                else:
+                    log.info("coding_patch_apply_failed", extra=apply_result)
+                    return f"{summary}\n\n❌ Failed to apply changes: {apply_result.get('error', 'unknown')}"
+            else:
+                log.info("coding_patch_application_declined", extra={})
+                return f"{summary}\n\nChanges NOT applied (code was generated but not written to disk)."
+
+        return summary
 
     # Low-confidence routing to anything other than a plain question is
     # exactly the failure mode that caused the search_files/remember_fact
@@ -568,16 +625,68 @@ contain enough information to answer, say so plainly."""
 
 
 def format_coding_result(result: dict) -> str:
-    """Present coding verification without claiming that repository files changed."""
+    """Present coding verification with plan, code, test results, and review."""
     status = result["status"]
+    attempts = result.get("attempts", 0)
+    lines: list[str] = []
+
+    # Status header
     if status == "passed":
-        execution = result["execution"]
-        output = execution.get("stdout", "").strip()
-        output_note = f"\nSandbox output:\n{output}" if output else ""
-        return f"Generated code passed syntax and sandbox verification after {result['attempts']} attempt(s). No files were changed.{output_note}"
-    if status == "unverified":
-        return f"Generated code passed syntax checks, but sandbox verification was unavailable. No files were changed.\nReason: {result['execution'].get('stderr', '')}"
-    return f"Generated code could not be verified after {result['attempts']} attempt(s). No files were changed.\nReason: {result.get('error', 'unknown verification failure')}"
+        lines.append(f"✅ Code passed verification after {attempts} attempt(s).")
+    elif status == "unverified":
+        lines.append(f"⚠️ Code passed syntax but sandbox was unavailable ({attempts} attempt(s)).")
+    else:
+        lines.append(f"❌ Code failed verification after {attempts} attempt(s).")
+        if result.get("error"):
+            lines.append(f"   Reason: {result['error']}")
+
+    # Plan summary
+    plan = result.get("plan", {})
+    if plan.get("goal"):
+        lines.append(f"\nGoal: {plan['goal']}")
+
+    # Code preview (truncated)
+    code = result.get("code", "")
+    if code:
+        code_lines = code.splitlines()
+        preview = code_lines[:20]
+        lines.append(f"\n--- Generated code ({len(code_lines)} lines) ---")
+        lines.extend(preview)
+        if len(code_lines) > 20:
+            lines.append(f"... ({len(code_lines) - 20} more lines)")
+
+    # Test results
+    test_result = result.get("test_result", {})
+    if test_result:
+        test_status = test_result.get("status", "unknown")
+        lines.append(f"\nTests: {test_status}")
+        if test_result.get("stdout"):
+            lines.append(f"Test output: {test_result['stdout'][:300]}")
+
+    # Sandbox execution
+    execution = result.get("execution", {})
+    if execution and execution.get("stdout"):
+        lines.append(f"\nSandbox output: {execution['stdout'][:300]}")
+
+    # LLM review
+    review = result.get("review", {})
+    if review:
+        approved = "✅ Approved" if review.get("approved") else "⚠️ Not approved"
+        lines.append(f"\nLLM Review: {approved}")
+        if review.get("summary"):
+            lines.append(f"  Summary: {review['summary']}")
+        if review.get("issues"):
+            for issue in review["issues"]:
+                lines.append(f"  - {issue}")
+        if review.get("reviewer_source"):
+            lines.append(f"  Reviewer: {review['reviewer_source']}")
+
+    # Target file
+    patch = result.get("patch", {})
+    if patch.get("target_file"):
+        lines.append(f"\nTarget file: {patch['target_file']}")
+
+    return "\n".join(lines)
 
 
 def _coerce_arg_types(func_name: str, args: dict) -> dict:

@@ -172,12 +172,16 @@ instruction.
   `should_ask_ambiguous_term_question()`, `generate_ambiguity_reply()`, and
   `tone_for_prompt()`. Nuanced process questions are answered by
   `_reason_over_process_data()` using the collected process data only.
-- `coding_agent.py` — narrow coding specialist and verifier workflow following
-  plan -> patch -> test -> verify, with bounded Python execution through
-  bubblewrap. It now generates request-specific plans and Python patches through
-  the coding provider profile, retries failed syntax or sandbox verification
-  once, applies resource limits in the sandbox, and does not yet write
-  generated patches back to repository files.
+- `coding_agent.py` — SWE-agent pattern coding specialist (plan → read context → patch → test → verify).
+  Read boundary: `/home/nithiish/Documents` (50KB cap).
+  Write boundary: `/home/nithiish/Documents/ai_assistanceworkspace` only.
+  Includes context-aware planning, structured code patching, automated test generation, bubblewrap sandboxing
+  (isolated and project-aware modes with optional network for API testing), second-pass LLM review
+  (using `general_qa` profile for a true second opinion), automatic timestamped backups (`.backups/`),
+  and explicit user confirmation before applying file modifications.
+- `tests/test_coding_agent.py` — 35 offline unit tests for `coding_agent.py` covering path validation,
+  file reading limits, markdown stripping, plan/patch/test generation, LLM review parsing, file application with backups,
+  and bubblewrap sandbox runner modes.
 - `.env.example` — template for API keys (Gemini, Groq, NVIDIA, GitHub
   Models, Cerebras). Real `.env` is gitignored, never commit it.
 - `cleanup_garbage_facts.py` — one-time script, already used to clean up
@@ -331,11 +335,14 @@ instruction.
   answers Zedek's previous question or starts a new topic, and keeps the
   assistant's identity separate from stored user facts to reduce blended or
   contradictory replies.
-- Sandboxed Python execution exists through bubblewrap; broader repository
-  mutation and test execution remain deliberately restricted.
-- No evaluator/verifier agent yet.
-- No watchdog, no security module, no wake-word listener, no remaining
-  specialist agents (research, web) yet.
+- Step 2 Coding Specialist is fully implemented and tested (35 unit tests in `tests/test_coding_agent.py`
+  plus 34 hybrid router/ambiguity tests = 69 total tests passing, 0 regressions).
+- Three-checkpoint approval workflow verified in `orchestrator.py`: (1) Tier gate, (2) Plan approval,
+  (3) Pre-apply confirmation showing code diff/preview and LLM review verdict.
+- Safe file application implemented with automated timestamped backups in `.backups/` and strict write boundary
+  enforcement (`/home/nithiish/Documents/ai_assistanceworkspace`).
+- Bubblewrap sandbox execution supports both fully isolated and project-aware execution (read-only mount of Documents
+  directory and optional network capability for API testing).
 
 ## Completed in the current iteration (do not repeat)
 
@@ -414,37 +421,51 @@ instruction.
     persistence (save/dedup/hot-reload), 15-word quality guard, `general_question`
     exclusion, and `ROUTER_TOOLS` schema integrity.
 
+- **Coding Specialist + Verifier Loop (SWE-agent Pattern) fully implemented** (this iteration):
+  - Rewrote `coding_agent.py`:
+    - **Path boundaries & security**: Set `CODING_READ_ROOT = "/home/nithiish/Documents"` and `CODING_WRITE_ROOT = "/home/nithiish/Documents/ai_assistanceworkspace"`. Path traversal blocked with strict validation. 50KB file size safety cap.
+    - **Phase 2A (Context-aware planning & patching)**: `plan_task()` auto-discovers relevant files or accepts explicit paths, gathering project context for the planning prompt. `patch()` produces structured patches targeting write workspace files.
+    - **Phase 2B (Test generation & execution)**: `generate_tests()` synthesizes isolated Python unit assertions. `SandboxedPythonRunner` extended with `project_aware=True` (read-only mount) and `allow_network=True` (for API testing).
+    - **Phase 2C (LLM-assisted verification)**: `Verifier.review_with_llm()` uses `task="general_qa"` to obtain a genuine independent second-opinion review on code correctness and safety.
+    - **Phase 2D & 2E (Orchestrator integration & safe application)**: Added 3-checkpoint approval workflow in `orchestrator.py`. `apply_patch()` creates timestamped backups in `.backups/` and writes only after explicit user confirmation.
+    - **Created `tests/test_coding_agent.py`**: 35 comprehensive unit tests (all passing). Full test suite now at **69 passed tests**.
+
 ## Next steps (in the order previously agreed, now continuing from the current state)
 
-1. **Test provider-backed coding generation** with real free-tier API keys.
-2. **Coding specialist + verifier loop (OpenHands / SWE-agent pattern)** —
-   add a dedicated coding sub-agent that follows a plan → patch → test → verify
-   loop, rather than trying to do everything in one step. This is a proven
-   architecture pattern for code-heavy tasks and is especially useful for
-   repo changes, bug fixing, and validation workflows.
-3. **Expand sandboxed execution carefully** to support isolated test runs;
-  the current bubblewrap runner handles Python snippets only and does not
-  expose the repository or arbitrary shell commands.
-4. **Evaluator/verifier agent** — separate from the task agent and the
+1. ~~**Test provider-backed coding generation** with real free-tier API keys.~~ ✅ **DONE** (2026-08-25) — all providers verified working.
+2. ~~**Coding specialist + verifier loop (OpenHands / SWE-agent pattern)**~~ ✅ **DONE** (2026-08-25) — SWE-agent pattern fully built and verified without external dependencies.
+3. **MCP client support** — add a Model Context Protocol client layer so Zedek
+   can connect to external MCP tool servers (filesystem, databases, APIs, code
+   analysis tools, etc.) without modifying the orchestrator's core routing.
+   This is additive: new capabilities plug in as MCP server connections,
+   discovered and invoked through a thin client module alongside the existing
+   system agent. The tier gate and safety model still apply to every MCP tool
+   call. Implementation: a new `mcp_client.py` module that discovers available
+   MCP servers, exposes their tools to the orchestrator as callable functions,
+   and routes responses back through the existing pipeline.
+4. **Expand sandboxed execution carefully** to support isolated test runs;
+   the current bubblewrap runner handles Python snippets only and does not
+   expose the repository or arbitrary shell commands.
+5. **Evaluator/verifier agent** — separate from the task agent and the
    watchdog, ideally using a different model than whichever one performed
    the task, to catch hallucinated/wrong content (see known issue #3 above,
    still unresolved). This should review patch correctness, test results,
    and whether the agent stayed within the user's actual intent.
-5. **Task planner / decomposer agent (optional but useful)** — a lightweight
+6. **Task planner / decomposer agent (optional but useful)** — a lightweight
    planning pass that breaks a large request into concrete sub-tasks and
    dependency order before execution. This can be implemented as a small,
    specialized planner rather than a full multi-agent company model.
-6. **Remaining specialist agents**: research/RAG agent, web/browser agent.
-7. **Watchdog module** — separate process, observes agent actions against
+7. **Remaining specialist agents**: research/RAG agent, web/browser agent.
+8. **Watchdog module** — separate process, observes agent actions against
    stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
    scaffolded in design but Tier 3 execution is currently OFF, so this
    isn't urgent yet.
-8. **Security module** — confirmation word + rotation, voice-print
+9. **Security module** — confirmation word + rotation, voice-print
    verification (in scope per user, not deferred), separate voice listener,
    password-gated UI panel, isolated encrypted local storage. Not started.
-9. **Wake-word general Q&A mode** — always-on lightweight listener, separate
-   from the security module's voice channel.
-10. **Academic/placement-prep tracking** — the actual "personal tutor" use
+10. **Wake-word general Q&A mode** — always-on lightweight listener, separate
+    from the security module's voice channel.
+11. **Academic/placement-prep tracking** — the actual "personal tutor" use
     case (DSA/aptitude practice tracking, weak-topic identification) hasn't
     been built yet; this was identified as the real differentiator the user
     wants but is still just a stated goal, not implemented.
@@ -453,6 +474,8 @@ instruction.
 
 - Use the OpenHands / SWE-agent pattern as a blueprint for the coding layer:
   plan → read context → patch → run tests → fix failures → verify.
+  **Do not integrate OpenHands as a dependency** — build the pattern inside
+  `coding_agent.py` using the existing provider chain and bubblewrap sandbox.
 - Keep the current personal-assistant architecture as the top-level orchestrator;
   do not replace it with a fully autonomous coding bot.
 - Keep the safety and tier gate in front of all execution steps, even for the
@@ -462,6 +485,10 @@ instruction.
 - Keep the multi-agent decomposition lightweight and explicit; a full social
   "company-of-agents" structure is not required for this project's current
   goals and would increase complexity faster than value.
+- **MCP client calls are subject to the same tier gate as all other actions.**
+  An MCP tool that deletes files is still a destructive action, regardless of
+  how it was discovered. The MCP client must translate tool metadata into
+  tier-gate-compatible risk classifications before execution.
 
 > Important: the ambiguity-handling, gratitude guard, and tone adaptation pass
 > is complete and should be treated as finished work. Do not reopen or repeat
