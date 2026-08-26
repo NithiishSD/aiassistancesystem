@@ -105,6 +105,17 @@ ROUTER_TOOLS: list[dict] = [
         ),
     },
     {
+        "name": "system_inspect",
+        "description": (
+            "User wants to inspect, query, or check system metrics, hardware specs, installed packages "
+            "or applications count, OS version, kernel release, battery status, CPU/GPU info, network IP, "
+            "uptime, or system environment. "
+            "Examples: 'how many applications exist in this system', 'how many packages are installed', "
+            "'what is my battery level', 'what kernel version is running', 'check CPU model and temperature', "
+            "'what is my IP address', 'show system uptime'."
+        ),
+    },
+    {
         "name": "unsupported",
         "description": (
             "User is asking for an action that Zedek does not support: "
@@ -131,3 +142,4 @@ ROUTER_TOOLS: list[dict] = [
 # Lookup set for fast membership checks (used in classifier.py to validate
 # the LLM's tool-call response before trusting it).
 VALID_INTENT_NAMES: frozenset[str] = frozenset(t["name"] for t in ROUTER_TOOLS)
+

@@ -198,12 +198,22 @@ INTENT_UTTERANCES = {
         "why is this process using so much CPU",
     ],
     "open_application": [
-        "Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal, browser, or editor already present on the user's computer.",
+        "Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal, browser, or editor already present on the user's computer. Command to launch a specific program only, not questions about installed software.",
         "open or launch an installed desktop app like Brave browser, VS Code, or VLC",
         "start the calculator, terminal, or text editor application",
         "run an existing installed program on my Linux machine",
         "can you open Brave application",
         "open the calculator application",
+    ],
+    "system_inspect": [
+        "Inspect, query, check, or report system environment metrics, hardware specifications, installed software package counts, battery percentage, OS kernel version, CPU GPU details, network IP, or system status.",
+        "how many applications or packages exist on this system",
+        "how many installed packages do I have",
+        "what is my laptop battery level and percentage",
+        "what Linux kernel version is currently running",
+        "what is my CPU model and hardware specs",
+        "show system uptime and hostname",
+        "what is my local IP address",
     ],
 }
 
@@ -342,6 +352,15 @@ def _is_semantically_valid_for_intent(text: str, intent: str) -> bool:
     if intent in ("top_memory_processes", "list_processes_detailed"):
         proc_signals = ["memory", "ram", "process", "processes", "cpu", "eating", "usage", "pid", "threads", "consuming"]
         return any(sig in lowered for sig in proc_signals)
+
+    if intent == "system_inspect":
+        sys_signals = [
+            "system", "package", "packages", "application", "applications", "app", "apps",
+            "battery", "kernel", "os", "linux", "cpu", "gpu", "hardware", "spec", "specs",
+            "ip", "network", "uptime", "hostname", "version", "installed", "exist", "count",
+            "temperature", "temp", "memory", "ram", "swap", "disk", "distro", "ubuntu"
+        ]
+        return any(sig in lowered for sig in sys_signals)
 
     return True
 

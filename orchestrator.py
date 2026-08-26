@@ -14,6 +14,7 @@ Pipeline: request -> intent + domain -> tier gate -> execute or retrieve+answer 
 """
 
 import json
+import os
 import re
 import ollama
 from zedek_logger import get_logger
@@ -29,6 +30,122 @@ log = get_logger("orchestrator")
 ROUTING_MODEL = "llama3.1:8b"
 CODING_SPECIALIST = CodingSpecialist()
 LAST_ROUTING_DECISION: dict | None = None
+
+# Path for dynamically learned/verified system inspection commands
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DYNAMIC_SYSTEM_TOOLS_PATH = os.path.join(_PROJECT_ROOT, "data", "dynamic_system_tools.json")
+
+
+def _load_dynamic_system_tools() -> dict[str, str]:
+    if not os.path.exists(DYNAMIC_SYSTEM_TOOLS_PATH):
+        return {}
+    try:
+        with open(DYNAMIC_SYSTEM_TOOLS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_dynamic_system_tool(query: str, command: str) -> None:
+    data = _load_dynamic_system_tools()
+    norm = (query or "").strip().lower()
+    data[norm] = command.strip()
+    try:
+        os.makedirs(os.path.dirname(DYNAMIC_SYSTEM_TOOLS_PATH), exist_ok=True)
+        with open(DYNAMIC_SYSTEM_TOOLS_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log.info("dynamic_system_tool_save_failed", extra={"error": str(e)})
+
+
+def _clean_generated_command(raw: str) -> str:
+    """Extract a clean shell command from LLM output, stripping markdown fences and language labels."""
+    if not raw:
+        return ""
+    text = raw.strip()
+    match = re.search(r"```(?:bash|sh|zsh)?\s*\n([\s\S]*?)\n```", text, flags=re.IGNORECASE)
+    if match:
+        lines = [line.strip() for line in match.group(1).splitlines() if line.strip() and not line.strip().startswith("#")]
+        if lines:
+            return lines[0]
+
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    for line in lines:
+        cleaned = line.strip("`'\" ").strip()
+        if cleaned.lower() in ("bash", "sh", "zsh", "shell"):
+            continue
+        if cleaned.lower().startswith("command:"):
+            cleaned = cleaned[8:].strip("`'\" ")
+        if cleaned:
+            return cleaned
+    return text.strip("`'\" ")
+
+
+def _handle_system_inspect(user_input: str, domain: str) -> str:
+    """Safely inspect system metrics/packages using verified read-only commands with dynamic caching."""
+    import command_verifier
+
+    norm = (user_input or "").strip().lower()
+    cached_tools = _load_dynamic_system_tools()
+
+    command = cached_tools.get(norm)
+    via_cache = bool(command)
+
+    if not command:
+        prompt = (
+            "You are a Linux system administration assistant. Generate a SINGLE safe, non-interactive, "
+            "read-only bash command or pipeline to inspect the system and answer the user's question.\n"
+            "Rules:\n"
+            "- Only read-only commands (dpkg, uname, lscpu, cat /sys/..., cat /proc/..., free, df, ps, uptime, ip, which, wc, grep, awk, cut, etc.)\n"
+            "- No modifications, no sudo, no file writes (> or >>), no interactive flags\n"
+            "- Output ONLY the raw command string without markdown fences, quotes, or explanation.\n\n"
+            f"User Question: {user_input}"
+        )
+        try:
+            res = llm_provider.generate_chat([{"role": "user", "content": prompt}], task="process_reasoning")
+            command = _clean_generated_command(res.get("answer", ""))
+        except Exception as e:
+            log.info("system_inspect_command_gen_failed", extra={"error": str(e)})
+            return answer_general_question(user_input, domain)
+
+    if not command:
+        return answer_general_question(user_input, domain)
+
+    # Verify and run command through command_verifier
+    verified = command_verifier.verify_command(command)
+    if not verified.get("proceed"):
+        log.info("system_inspect_command_blocked", extra={"command": command, "reason": verified.get("reason")})
+        return f"Safety check blocked command '{command}': {verified.get('reason')}"
+
+    dry_run = verified.get("dry_run")
+    if not dry_run or not dry_run.get("success"):
+        error_msg = dry_run.get("error", "Execution failed") if dry_run else "Execution failed"
+        log.info("system_inspect_dry_run_failed", extra={"command": command, "error": error_msg})
+        return f"Could not inspect system ({error_msg})."
+
+    output = dry_run.get("stdout", "").strip()
+    if not output:
+        output = dry_run.get("stderr", "").strip() or "0"
+
+    # If successfully executed and was newly generated, save to dynamic tool cache and router
+    if not via_cache and output:
+        _save_dynamic_system_tool(user_input, command)
+        classifier.add_utterance_dynamically(user_input, "system_inspect")
+        log.info("dynamic_system_tool_registered", extra={"query": user_input, "command": command})
+
+    # Synthesize the raw output into a natural response
+    summary_prompt = (
+        f"The user asked: '{user_input}'\n"
+        f"System inspection command `{command}` returned:\n"
+        f"{output}\n\n"
+        "Provide a concise, direct, helpful one-to-two sentence answer to the user based on this data. "
+        "State the exact numbers/facts clearly."
+    )
+    try:
+        synth = llm_provider.generate_chat([{"role": "user", "content": summary_prompt}], task="general_qa")
+        return synth.get("answer", f"System result: {output}")
+    except Exception:
+        return f"System result: {output}"
 
 # --- Short-term session context (this run only, NOT persisted to disk) ---
 # Separate from memory.py's long-term ChromaDB store. This holds the last
@@ -116,7 +233,8 @@ def is_term_already_specified(text: str, term: str) -> bool:
     context_signals = [
         "framework", "frontend", "language", "code", "course", "skill", 
         "study", "learning", "project", "subject", "lib", "library", "api",
-        "space", "stars", "planet", "game", "metal", "banking"
+        "space", "stars", "planet", "game", "metal", "banking",
+        "os", "linux", "operating system", "system", "version", "ubuntu", "debian", "arch", "command", "terminal"
     ]
     
     # If the user input is longer than 12 words, they are likely providing context, not asking a bare question
@@ -636,6 +754,9 @@ def execute(decision: dict) -> str:
 
     if func_name == "correct_fact":
         return _handle_correction(decision.get("_original_input", ""), domain)
+
+    if func_name == "system_inspect":
+        return _handle_system_inspect(decision.get("_original_input", ""), domain)
 
     if func_name == "unsupported":
         reason = decision.get("reason", "this request")

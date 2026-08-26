@@ -283,6 +283,11 @@ instruction.
      (b) Added `strip_thinking_tags` in `llm_provider.py` to scrub reasoning traces before presenting responses.
      (c) Reduced `REQUEST_TIMEOUT` from 45s to 12s in `llm_provider.py` and deduplicated candidate pools.
 
+17. **Fixed-function bottleneck resolved with Dynamic Read-Only Command Inspection & Fast-Path Tool Caching**:
+   - **Issue**: Requests for system diagnostics or environment metrics outside the 6 hardcoded functions in `system_agent.py` (e.g. package counts, battery level, CPU specs, kernel version) were forced into `general_question` where the LLM refused with generic advice.
+   - **Fix**: Added `system_inspect` intent across `classifier.py`, `classifier_tools.py`, and `orchestrator.py`. Connected `command_verifier.py` to validate generated bash pipelines against risk rules and execute read-only commands (`dpkg`, `uname`, `lscpu`, `free`, `ip`, `ps`, `wc`, `grep`, etc.). Persisted successful queries to `data/dynamic_system_tools.json` and hot-rebuilt router utterances, enabling sub-50ms resolution on subsequent calls without LLM command regeneration.
+
+
 
 
 ## Notable changes added during the Astro/ambiguity debugging pass

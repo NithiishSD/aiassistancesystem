@@ -1,0 +1,3 @@
+{
+  "how many applications exist in this system": "dpkg --list | wc -l"
+}
