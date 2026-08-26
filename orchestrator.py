@@ -355,44 +355,58 @@ def route_request(user_input: str) -> dict:
 
 
 def _extract_application_name(user_input: str) -> str:
-    """Extract the requested application without relying on an LLM."""
+    """Extract the requested application name cleanly without relying on an LLM."""
     text = re.sub(r"\s+", " ", (user_input or "").strip())
+    if not text:
+        return ""
+
     lowered = text.lower()
 
     # If the user input looks like an informational question, don't treat the sentence as a launch target
-    if any(lowered.startswith(q) for q in ["what", "how", "why", "which", "where", "who", "can you tell", "list"]):
+    if any(lowered.startswith(q) for q in ["what ", "how ", "why ", "which ", "where ", "who ", "can you tell ", "list "]):
         match = re.search(
-            r"\b(?:open|launch|start|run)\s+(?:the\s+)?(?:application\s+|app\s+)?([a-zA-Z0-9_\-\.\+]+)",
+            r"\b(?:open|launch|start|run)\s+(?:the\s+)?([a-zA-Z0-9_\-\.\+\s]+?)(?:\s+(?:app|application|program|software))?(?:[?,.!;]|$)",
             text,
             flags=re.IGNORECASE,
         )
         if match:
-            candidate = match.group(1).strip(" .,!?")
-            if candidate.lower() not in ("it", "app", "application", "program", "this", "them"):
+            candidate = match.group(1).strip(" .,!?\"'")
+            if candidate.lower() not in ("it", "app", "application", "program", "this", "them", "file", "files", ""):
                 return candidate
         return ""
 
-    match = re.search(
-        r"(?:open|launch|start|run)\s+(?:the\s+)?(?:application\s+|app\s+)?([a-zA-Z0-9_\-\.\+]+)",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if match:
-        candidate = match.group(1).strip(" .,!?")
-        if candidate.lower() not in ("it", "app", "application", "program", "this", "them"):
-            return candidate
-
-    text = re.sub(
-        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|then\s+)?"
-        r"(?:open|launch|start)\s+",
+    # Strip conversational prefixes and leading intent commands
+    cleaned = re.sub(
+        r"^(?:(?:hey|hi|hello|zedek|yo)\s*,?\s*)*"
+        r"(?:(?:no|actually|wait|i\s+mean|i\s+said|its|it\'s|it\s+is|just)\s*,?\s*)*"
+        r"(?:(?:please|pls|can\s+you|could\s+you|would\s+you|kindly|then|try\s+to|help\s+me)\s+)*"
+        r"(?:open|launch|start|run|execute|fire\s+up)\s+"
+        r"(?:the\s+|an\s+|a\s+)?",
         "",
         text,
         flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\s+(?:application|app|program)$", "", text, flags=re.IGNORECASE)
-    cleaned = text.strip(" .,!?")
-    if not cleaned or cleaned.lower() in ("it", "app", "application", "program", "this", "them") or len(cleaned.split()) > 4:
+    ).strip()
+
+    # Strip conversational follow-ups / corrections (e.g. "its App center", "no, AppCenter")
+    cleaned = re.sub(
+        r"^(?:(?:hey|hi|hello|zedek|yo)\s*,?\s*)*"
+        r"(?:(?:no|actually|wait|i\s+mean|i\s+said|its|it\'s|it\s+is|just)\s*,?\s*)+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Strip trailing app/application/program descriptors
+    cleaned = re.sub(
+        r"\s+(?:application|app|program|software|package|tool)$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip(" .,!?\"'")
+
+    if not cleaned or cleaned.lower() in ("it", "app", "application", "program", "this", "them", "something") or len(cleaned.split()) > 5:
         return ""
+
     return cleaned
 
 

@@ -198,12 +198,15 @@ INTENT_UTTERANCES = {
         "why is this process using so much CPU",
     ],
     "open_application": [
-        "Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal, browser, or editor already present on the user's computer. Command to launch a specific program only, not questions about installed software.",
-        "open or launch an installed desktop app like Brave browser, VS Code, or VLC",
-        "start the calculator, terminal, or text editor application",
+        "Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal, browser, files manager, trash, app center, or editor already present on the user's computer. Command to launch a specific program only, not questions about installed software.",
+        "open or launch an installed desktop app like Brave browser, VS Code, App Center, Files, or VLC",
+        "start the calculator, terminal, trash, or text editor application",
         "run an existing installed program on my Linux machine",
         "can you open Brave application",
         "open the calculator application",
+        "open app center",
+        "open files app",
+        "open trash",
     ],
     "system_inspect": [
         "Inspect, query, check, or report system environment metrics, hardware specifications, installed software package counts, battery percentage, OS kernel version, CPU GPU details, network IP, or system status.",

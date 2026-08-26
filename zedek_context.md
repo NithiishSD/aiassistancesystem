@@ -287,6 +287,18 @@ instruction.
    - **Issue**: Requests for system diagnostics or environment metrics outside the 6 hardcoded functions in `system_agent.py` (e.g. package counts, battery level, CPU specs, kernel version) were forced into `general_question` where the LLM refused with generic advice.
    - **Fix**: Added `system_inspect` intent across `classifier.py`, `classifier_tools.py`, and `orchestrator.py`. Connected `command_verifier.py` to validate generated bash pipelines against risk rules and execute read-only commands (`dpkg`, `uname`, `lscpu`, `free`, `ip`, `ps`, `wc`, `grep`, etc.). Persisted successful queries to `data/dynamic_system_tools.json` and hot-rebuilt router utterances, enabling sub-50ms resolution on subsequent calls without LLM command regeneration.
 
+18. **Desktop Application Discovery, XDG Resolution, Argument Extraction, and Terminal Output Suppression**:
+   - **Issue**:
+     (a) `open_application` relied solely on `shutil.which(app_name)`, failing on common desktop applications where binary names differ from GUI names (e.g. "App Center" -> `/snap/bin/snap-store`, "Files" -> `/usr/bin/nautilus`, "VS Code" -> `code`), desktop names containing spaces/capitalization, and virtual system targets like "trash" (`gio open trash:///`).
+     (b) `_extract_application_name` in `orchestrator.py` truncated multi-word application names, parsed `"open app center"` as `'center'`, and did not strip conversational prefixes (e.g. `"its App center"`).
+     (c) Background desktop GUI processes (such as Brave, Chrome, Snap apps) inherited `stdout`/`stderr` file descriptors, causing GTK module warnings, Gtk-Message notices, and Chromium diagnostic logs to pollute the interactive CLI prompt.
+   - **Fix**:
+     (a) Added `_get_desktop_entries()` to scan and index XDG `.desktop` files across `/usr/share/applications`, `/var/lib/snapd/desktop/applications`, `~/.local/share/applications`, etc.
+     (b) Implemented `_resolve_application()` in `system_agent.py` supporting virtual system targets (trash), common desktop aliases (files, appcenter, terminal, calculator, vscode), exact and normalized `.desktop` application name matching, generic name matching, and PATH fallbacks.
+     (c) Updated `_extract_application_name()` in `orchestrator.py` to preserve multi-word application names, strip conversational prefixes (`"its "`, `"no, "`, `"i mean "`), and trim trailing app descriptors.
+     (d) Redirected `stdout`, `stderr`, and `stdin` to `subprocess.DEVNULL` in `subprocess.Popen` within `open_application()`, ensuring clean CLI output when background GUI applications are launched.
+     (e) Added unit tests in `tests/test_open_application.py` and configured `pytest.ini` for reliable test discovery.
+
 
 
 
