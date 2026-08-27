@@ -23,5 +23,37 @@
     "cwd": ".",
     "timeout": 30,
     "default_tier": 2
+  },
+  {
+    "name": "github_tools",
+    "description": "Read-only GitHub API tools: repo search, code search, README fetch. Set GITHUB_TOKEN for 5000 req/hr (60 without).",
+    "command": "python3",
+    "args": ["-m", "mcp_github_server"],
+    "cwd": ".",
+    "timeout": 15
+  },
+  {
+    "name": "weather_news_tools",
+    "description": "Real-time weather via wttr.in (no key) and news search via NewsAPI (set NEWS_API_KEY).",
+    "command": "python3",
+    "args": ["-m", "mcp_weather_news_server"],
+    "cwd": ".",
+    "timeout": 15
+  },
+  {
+    "name": "codeforces_tools",
+    "description": "Codeforces competitive programming tools: user stats, problem search by tag/rating, contest list. No key required.",
+    "command": "python3",
+    "args": ["-m", "mcp_codeforces_server"],
+    "cwd": ".",
+    "timeout": 15
+  },
+  {
+    "name": "semantic_scholar_tools",
+    "description": "Academic paper search via Semantic Scholar. Set SEMANTIC_SCHOLAR_API_KEY for higher rate limits.",
+    "command": "python3",
+    "args": ["-m", "mcp_semantic_scholar_server"],
+    "cwd": ".",
+    "timeout": 20
   }
 ]

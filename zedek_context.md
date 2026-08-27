@@ -547,32 +547,47 @@ instruction.
      genuine verb escalation, monotonic `default_tier` precedence), substring regression
      (`dispatch`/`compress`/`committee`/`progress`), per-verb coverage, backward-compat.
    Full suite: **188 passed, 0 failures** (was 152).
-   **Ready next:** Puppeteer/Playwright/GitHub-write — declare `"default_tier": 2` in
-   `mcp_servers.json` for any action-oriented server when adding it.
-6. **Expand sandboxed execution carefully** to support isolated test runs;
-
+6. **Expanded MCP Tool Servers Ecosystem (COMPLETED)**
+   Added 5 new MCP servers (bringing the total to **27 tools across 7 servers**):
+   - **`playwright_tools`** (`mcp_playwright_server.py`): Browser automation tools (`browser_navigate`,
+     `browser_click`, `browser_type`, `browser_get_text`, `browser_screenshot`). Configured with
+     `"default_tier": 2` in `mcp_servers.json`, full SSRF blocklist, `--no-sandbox` headless execution.
+     Verified live with E2E confirmation gate and live Chromium click execution on local test page.
+   - **`github_tools`** (`mcp_github_server.py`): Read-only repo search (`github_search_repos`),
+     code search (`github_search_code`), metadata (`github_get_repo`), README retrieval (`github_get_readme`).
+     Supports `GITHUB_TOKEN` for 5000 req/hr (gracefully falls back to 60 req/hr without token).
+   - **`weather_news_tools`** (`mcp_weather_news_server.py`): Real-time weather (`get_weather`,
+     `get_weather_forecast` via public wttr.in) and news headline search (`search_news` via NewsAPI).
+   - **`codeforces_tools`** (`mcp_codeforces_server.py`): Competitive programming tools for placement prep
+     (`cf_user_info`, `cf_user_submissions`, `cf_problem_search` with tag/rating filtering,
+     `cf_contest_list`, `cf_problem_by_id`). Fully public Codeforces API.
+   - **`semantic_scholar_tools`** (`mcp_semantic_scholar_server.py`): Academic paper research
+     (`scholar_search_papers`, `scholar_paper_details`, `scholar_paper_citations`, `scholar_author_papers`).
+   - `tests/test_mcp_expansion_servers.py`: Unit and mock tests for all expansion servers.
+   Full test suite: **198 passed, 0 failures** (was 188).
+7. **Expand sandboxed execution carefully** to support isolated test runs;
    the current bubblewrap runner handles Python snippets only and does not
    expose the repository or arbitrary shell commands.
-6. **Evaluator/verifier agent** — separate from the task agent and the
+8. **Evaluator/verifier agent** — separate from the task agent and the
    watchdog, ideally using a different model than whichever one performed
    the task, to catch hallucinated/wrong content (see known issue #3 above,
    still unresolved). This should review patch correctness, test results,
    and whether the agent stayed within the user's actual intent.
-7. **Task planner / decomposer agent (optional but useful)** — a lightweight
+9. **Task planner / decomposer agent (optional but useful)** — a lightweight
    planning pass that breaks a large request into concrete sub-tasks and
    dependency order before execution. This can be implemented as a small,
    specialized planner rather than a full multi-agent company model.
-8. **Remaining specialist agents**: research/RAG agent, web/browser agent.
-9. **Watchdog module** — separate process, observes agent actions against
-   stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
-   scaffolded in design but Tier 3 execution is currently OFF, so this
-   isn't urgent yet.
-10. **Security module** — confirmation word + rotation, voice-print
+10. **Remaining specialist agents**: research/RAG agent, web/browser agent.
+11. **Watchdog module** — separate process, observes agent actions against
+    stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
+    scaffolded in design but Tier 3 execution is currently OFF, so this
+    isn't urgent yet.
+12. **Security module** — confirmation word + rotation, voice-print
     verification (in scope per user, not deferred), separate voice listener,
     password-gated UI panel, isolated encrypted local storage. Not started.
-11. **Wake-word general Q&A mode** — always-on lightweight listener, separate
+13. **Wake-word general Q&A mode** — always-on lightweight listener, separate
     from the security module's voice channel.
-12. **Academic/placement-prep tracking** — the actual "personal tutor" use
+14. **Academic/placement-prep tracking** — the actual "personal tutor" use
     case (DSA/aptitude practice tracking, weak-topic identification) hasn't
     been built yet; this was identified as the real differentiator the user
     wants but is still just a stated goal, not implemented.

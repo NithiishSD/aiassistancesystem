@@ -29,7 +29,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJECT_ROOT)
 
 
-def test_gate_fires_for_playwright_click():
+def check_gate_fires_for_playwright_click():
     """
     Simulate what the orchestrator does: look up tool, pass description to gate.
     Confirm gate returns tier=2 / action=confirm — NOT tier=1 / action=notify.
@@ -95,7 +95,7 @@ def test_gate_fires_for_playwright_click():
     return True
 
 
-def test_live_browser_click(base_url: str):
+def check_live_browser_click(base_url: str):
     """
     Actually launch Chromium, navigate to the test page, click #risky-btn,
     and verify the result div becomes visible. Requires the local HTTP server
@@ -136,13 +136,13 @@ if __name__ == "__main__":
     print("Zedek MCP Playwright E2E Gate Verification")
     print("=" * 60)
 
-    gate_ok = test_gate_fires_for_playwright_click()
+    gate_ok = check_gate_fires_for_playwright_click()
     if not gate_ok:
         print("\n❌ Gate test FAILED. Fix before proceeding.")
         sys.exit(1)
 
     if args.live:
-        live_ok = test_live_browser_click(args.base_url)
+        live_ok = check_live_browser_click(args.base_url)
         if not live_ok:
             print("\n❌ Live browser test FAILED.")
             sys.exit(1)
