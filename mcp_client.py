@@ -79,6 +79,7 @@ class MCPServerConfig:
     cwd: str
     description: str | None
     timeout: float  # used for both discovery and tool-call timeouts
+    default_tier: int  # server-level risk floor; 0-3, defaults to 1 if absent from config
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,16 @@ def _load_config() -> list[MCPServerConfig]:
         except (TypeError, ValueError):
             timeout = _DISCOVERY_TIMEOUT_DEFAULT
 
+        raw_default_tier = entry.get("default_tier", 1)
+        try:
+            default_tier = int(raw_default_tier)
+            if default_tier not in (0, 1, 2, 3):
+                log.info("mcp_config_invalid_default_tier",
+                         extra={"server_name": name, "value": raw_default_tier})
+                default_tier = 1  # fail safe: back to MCP default
+        except (TypeError, ValueError):
+            default_tier = 1
+
         seen_names.add(name)
         configs.append(MCPServerConfig(
             name=name,
@@ -214,6 +225,7 @@ def _load_config() -> list[MCPServerConfig]:
             cwd=resolved_cwd,
             description=description,
             timeout=timeout,
+            default_tier=default_tier,
         ))
         log.info("mcp_config_entry_loaded", extra={"server_name": name, "command": resolved_command})
 
@@ -518,6 +530,16 @@ def get_tool_registry() -> dict[str, MCPToolSpec]:
     Returns a copy — callers cannot mutate internal state.
     """
     return dict(_TOOL_REGISTRY)
+
+
+def get_server_registry() -> dict[str, MCPServerConfig]:
+    """Read-only view of the current server registry.
+
+    Keys are server names (matching MCPServerConfig.name).
+    Returns a copy — callers cannot mutate internal state.
+    Used by tier_gate to resolve server-level default_tier values.
+    """
+    return dict(_SERVER_REGISTRY)
 
 
 def get_discovery_stats() -> dict:

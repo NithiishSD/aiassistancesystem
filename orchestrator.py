@@ -827,7 +827,8 @@ def _execute_mcp_tool(decision: dict) -> str:
         return f"Invalid arguments for {tool_spec.tool_name}: {arg_error}"
 
     # Always pass through gate() — never bypassed
-    gate_decision = gate(qualified_name, tool_args, user_input=original_input)
+    gate_decision = gate(qualified_name, tool_args, user_input=original_input,
+                         tool_description=tool_spec.description)
     if gate_decision["action"] == "blocked":
         return gate_decision["message"]
     if gate_decision["action"] == "confirm":
