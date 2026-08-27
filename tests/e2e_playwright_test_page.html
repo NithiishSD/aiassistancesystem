@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Zedek MCP Playwright E2E Test Page</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 60px auto; }
+    button { padding: 12px 24px; font-size: 16px; cursor: pointer; background: #e74c3c; color: white; border: none; border-radius: 6px; }
+    #result { margin-top: 24px; padding: 16px; background: #f0f0f0; border-radius: 6px; display: none; }
+    #result.visible { display: block; }
+  </style>
+</head>
+<body>
+  <h1>Tier 2 Gate E2E Test</h1>
+  <p>This page is used to verify that Playwright <code>browser_click</code> triggers the Tier 2 confirmation gate before executing.</p>
+  <button id="risky-btn" onclick="document.getElementById('result').className='visible'">
+    Click Me (Risky Action)
+  </button>
+  <div id="result">
+    <strong>✅ Button was clicked successfully.</strong><br>
+    If you see this, the browser action completed.
+  </div>
+</body>
+</html>

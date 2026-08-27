@@ -14,5 +14,14 @@
     "args": ["-m", "mcp_online_server"],
     "cwd": ".",
     "timeout": 15
+  },
+  {
+    "name": "playwright_tools",
+    "description": "Browser automation tools via Playwright/Chromium. Risky — requires explicit confirmation for all tools.",
+    "command": "python3",
+    "args": ["-m", "mcp_playwright_server"],
+    "cwd": ".",
+    "timeout": 30,
+    "default_tier": 2
   }
 ]

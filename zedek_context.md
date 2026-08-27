@@ -522,11 +522,35 @@ instruction.
    `tests/test_mcp_online.py`: 37 tests covering SSRF blocklist, HTML helpers,
    tier-gate no-false-escalation (including `write`-in-query collision regression test),
    and mocked HTTP responses for all three tools. Full suite: **152 passed, 0 failures**.
-   **Next (separate pass):** verb-escalation expansion in `tier_gate.py` (action-verb
-   Tier 2 patterns distinguishing world-mutating effects from input descriptions),
-   `default_tier` ceiling-raiser in `mcp_servers.json`, and associated test coverage.
-   Do NOT wire Puppeteer/Playwright/GitHub-write until that pass is complete and green.
-5. **Expand sandboxed execution carefully** to support isolated test runs;
+   ~~**Next (separate pass):** verb-escalation expansion in `tier_gate.py`~~ — **COMPLETED** (see item 5 below).
+5. **Tier gate verb-escalation, description inspection & `default_tier` precedence (COMPLETED)**
+   Prerequisites satisfied: Puppeteer/Playwright/GitHub-write can now be safely wired in.
+   - `tier_gate.py`: Added `MCP_ACTION_VERB_PATTERNS` (11 action verbs: click, submit,
+     type into, press, send, purchase, confirm, write to, commit, push, patch) compiled
+     with `\b...(s|es|ed|ing)?\b` + `IGNORECASE` — matches inflected forms (`clicks`,
+     `submits`, `sends`) while blocking substring collisions (`dispatch`≠`patch`,
+     `compress`≠`press`, `committee`≠`commit`).
+   - `_extract_effect_description()`: strips `Args:`/`Parameters:` blocks before verb
+     matching — verbs in parameter descriptions never trip escalation.
+   - `_server_default_tier()`: lazy-imports `mcp_client`, resolves owning server by
+     qualified-name prefix, returns its `default_tier`. Scoped to `mcp_*` only — non-MCP
+     functions use `FUNCTION_TIERS` exclusively, preventing cross-contamination.
+   - `classify()`/`gate()`: additive `tool_description=""` parameter (backward-compatible);
+     four independent lanes all feed into `max()` — pattern-from-args/user-input,
+     effect-verb-from-description, server-default-tier, FUNCTION_TIERS/mcp-base. Each lane
+     can only raise the tier, never lower it.
+   - `mcp_client.py`: `default_tier: int` field on `MCPServerConfig`, parsed from
+     `mcp_servers.json` with validation and fail-safe to 1. New `get_server_registry()`
+     public accessor (same copy-return pattern as `get_tool_registry()`).
+   - `orchestrator.py`: one-line change — `tool_spec.description` threaded into `gate()`.
+   - `tests/test_tier_gate_verbs.py`: 36 tests — three critical cases (collision-avoidance,
+     genuine verb escalation, monotonic `default_tier` precedence), substring regression
+     (`dispatch`/`compress`/`committee`/`progress`), per-verb coverage, backward-compat.
+   Full suite: **188 passed, 0 failures** (was 152).
+   **Ready next:** Puppeteer/Playwright/GitHub-write — declare `"default_tier": 2` in
+   `mcp_servers.json` for any action-oriented server when adding it.
+6. **Expand sandboxed execution carefully** to support isolated test runs;
+
    the current bubblewrap runner handles Python snippets only and does not
    expose the repository or arbitrary shell commands.
 6. **Evaluator/verifier agent** — separate from the task agent and the
@@ -543,12 +567,12 @@ instruction.
    stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
    scaffolded in design but Tier 3 execution is currently OFF, so this
    isn't urgent yet.
-9. **Security module** — confirmation word + rotation, voice-print
-   verification (in scope per user, not deferred), separate voice listener,
-   password-gated UI panel, isolated encrypted local storage. Not started.
-10. **Wake-word general Q&A mode** — always-on lightweight listener, separate
+10. **Security module** — confirmation word + rotation, voice-print
+    verification (in scope per user, not deferred), separate voice listener,
+    password-gated UI panel, isolated encrypted local storage. Not started.
+11. **Wake-word general Q&A mode** — always-on lightweight listener, separate
     from the security module's voice channel.
-11. **Academic/placement-prep tracking** — the actual "personal tutor" use
+12. **Academic/placement-prep tracking** — the actual "personal tutor" use
     case (DSA/aptitude practice tracking, weak-topic identification) hasn't
     been built yet; this was identified as the real differentiator the user
     wants but is still just a stated goal, not implemented.
