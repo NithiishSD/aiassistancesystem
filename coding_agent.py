@@ -232,8 +232,17 @@ def _create_backup(file_path: str) -> str | None:
 # Verifier
 # ═══════════════════════════════════════════════════════════════════════════
 
+from evaluator_agent import EvaluatorAgent, EvaluationReport
+
+
 class Verifier:
-    """Second-pass validation for generated Python code and patches."""
+    """Second-pass validation for generated Python code and patches.
+
+    Now backed by EvaluatorAgent with Three-Pillar Verification.
+    """
+
+    def __init__(self) -> None:
+        self.evaluator = EvaluatorAgent()
 
     def verify_python(self, code: str) -> bool:
         """Return True when the snippet parses and compiles cleanly."""
@@ -247,12 +256,12 @@ class Verifier:
             return False
 
     def review_patch(self, code: str) -> dict[str, Any]:
-        """Return a simple structured result for a patch candidate."""
-        valid = self.verify_python(code)
+        """Return a structured static security result for a patch candidate."""
+        is_safe, issues = self.evaluator.check_static_security(code)
         return {
-            "valid": valid,
-            "issues": [] if valid else ["Python syntax error or invalid code snippet"],
-            "status": "pass" if valid else "fail",
+            "valid": is_safe,
+            "issues": issues,
+            "status": "pass" if is_safe else "fail",
         }
 
     def review_with_llm(
@@ -261,69 +270,12 @@ class Verifier:
         code: str,
         test_results: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Ask a second LLM (different task profile) to review the generated code.
-
-        Uses task="general_qa" so it may hit a different provider than the one
-        that generated the code — giving a genuine second opinion.
-        """
-        test_summary = "(No test results available.)"
-        if test_results:
-            test_summary = json.dumps(test_results, indent=2, default=str)
-
-        prompt = f"""You are a code reviewer. Review this generated code for correctness.
-
-Original request: {request}
-
-Generated code:
-{code}
-
-Test results:
-{test_summary}
-
-Return ONLY valid JSON with this shape:
-{{"approved": true/false, "issues": ["..."], "summary": "one-line summary"}}
-
-Check for:
-1. Does the code actually solve the original request?
-2. Are there obvious bugs, logic errors, or edge cases?
-3. Is the code safe (no system modifications, no credential exposure)?
-4. Did the tests pass? If not, is the failure in the code or the test?
-
-Be strict — only approve if the code genuinely works."""
-
-        try:
-            result = llm_provider.generate_chat(
-                [{"role": "user", "content": prompt}],
-                json_mode=True,
-                task="general_qa",  # different task profile for second opinion
-            )
-            review = json.loads(result["answer"])
-            log.info("llm_review_complete", extra={
-                "approved": review.get("approved"),
-                "source": result.get("source"),
-            })
-            return {
-                "approved": review.get("approved", False),
-                "issues": review.get("issues", []),
-                "summary": review.get("summary", "Review completed."),
-                "reviewer_source": result.get("source", "unknown"),
-            }
-        except (json.JSONDecodeError, TypeError, KeyError) as err:
-            log.info("llm_review_parse_failed", extra={"error": str(err)})
-            return {
-                "approved": False,
-                "issues": ["LLM review returned unparseable output."],
-                "summary": "Review failed — treating as not approved.",
-                "reviewer_source": "error",
-            }
-        except Exception as err:
-            log.info("llm_review_error", extra={"error": str(err)})
-            return {
-                "approved": False,
-                "issues": [f"Review error: {err}"],
-                "summary": "Review unavailable.",
-                "reviewer_source": "error",
-            }
+        """Ask the EvaluatorAgent for an independent review using the evaluation task profile."""
+        return self.evaluator.evaluate_with_llm(
+            request=request,
+            code=code,
+            test_results=test_results,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -699,23 +651,30 @@ RULES:
             )
 
             if execution["status"] in {"passed", "unavailable"}:
-                # Step 7: LLM-assisted review (second opinion)
+                # Step 7: Dual-model evaluation & verifier review
                 review = self._verifier.review_with_llm(
                     request, code, last_test_result,
                 )
                 last_review = review
 
-                return {
-                    "status": "passed" if execution["status"] == "passed" else "unverified",
-                    "attempts": attempt,
-                    "plan": plan,
-                    "patch": last_patch,
-                    "code": code,
-                    "test_code": last_test_code,
-                    "test_result": last_test_result,
-                    "execution": execution,
-                    "review": review,
-                }
+                if review.get("approved", False):
+                    return {
+                        "status": "passed" if execution["status"] == "passed" else "unverified",
+                        "attempts": attempt,
+                        "plan": plan,
+                        "patch": last_patch,
+                        "code": code,
+                        "test_code": last_test_code,
+                        "test_result": last_test_result,
+                        "execution": execution,
+                        "review": review,
+                    }
+
+                # Evaluator found issues — prepare feedback for next attempt if retries remain
+                advice = review.get("remediation_advice") or review.get("issues") or ["Review rejected"]
+                error = f"Evaluator feedback to address: {'; '.join(advice)}"
+                log.info("evaluator_requested_retry", extra={"attempt": attempt, "error": error[:200]})
+                continue
 
             error = f"Sandbox execution failed: {execution.get('stderr', '')}"
 

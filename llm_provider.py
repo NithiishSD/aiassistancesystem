@@ -54,6 +54,7 @@ OPENROUTER_CODING_CANDIDATES = [
 ]
 TASK_PROVIDERS: dict[str, list[str]] = {
     "coding": ["nvidia_nim", "openrouter", "groq", "local"],
+    "evaluation": ["gemini", "groq", "cerebras", "openrouter", "local"],
     "general_qa": ["gemini", "groq", "cerebras", "local"],
     "fact_handling": ["gemini", "groq", "local"],
     "process_reasoning": ["openrouter", "gemini", "cerebras", "local"],

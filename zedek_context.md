@@ -577,12 +577,19 @@ instruction.
    - Integrated into `coding_agent.py`'s `SandboxedPythonRunner` with full backward compatibility.
    - `tests/test_sandbox_runner.py`: 9 tests verifying syntax pre-checks, snippet runs, timeout protection,
      and copy-on-write isolation guarantees.
-   Full test suite: **207 passed, 0 failures** (was 198).
-8. **Evaluator/verifier agent** — separate from the task agent and the
-   watchdog, ideally using a different model than whichever one performed
-   the task, to catch hallucinated/wrong content (see known issue #3 above,
-   still unresolved). This should review patch correctness, test results,
-   and whether the agent stayed within the user's actual intent.
+8. **Evaluator & Verifier Agent with Three-Pillar Architecture (COMPLETED)**
+   Built dedicated [`evaluator_agent.py`](file:///home/nithiish/Desktop/aiassistancesystem/evaluator_agent.py) to catch hallucinations, logic errors, regressions, and security violations:
+   - **Pillar 1: Static & Security Analysis**: AST validation, forbidden import checks (`pty`, `posix`, etc.),
+     dangerous command pattern checks, and AST scope diffing against original code to prevent accidental function deletion.
+   - **Pillar 2: Dynamic Execution Verification**: Runs self-contained test assertions or pytest suites
+     in isolated copy-on-write sandboxes via `SandboxRunner`.
+   - **Pillar 3: Dual-Model LLM Intent & Correctness Evaluation**: Added `"evaluation"` task profile to
+     `llm_provider.py` (`["gemini", "groq", "cerebras", "openrouter", "local"]`) to ensure the reviewer
+     uses a distinct model family from the code generator (`"coding"` starts with `"nvidia_nim"`/`"openrouter"`).
+   - Generates structured `EvaluationReport` (`is_approved`, `verdict: accept/retry/reject`, `score`, `issues`, `remediation_advice`).
+   - Integrated into `coding_agent.py` (`Verifier` and `CodingSpecialist.implement_and_verify()` retry loop).
+   - `tests/test_evaluator_agent.py`: 14 tests covering all three pillars, schema validation, and pipeline integration.
+   Full test suite: **221 passed, 0 failures** (was 207).
 9. **Task planner / decomposer agent (optional but useful)** — a lightweight
    planning pass that breaks a large request into concrete sub-tasks and
    dependency order before execution. This can be implemented as a small,
