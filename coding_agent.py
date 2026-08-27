@@ -327,22 +327,29 @@ Be strict — only approve if the code genuinely works."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Sandboxed Python Runner
+# Sandboxed Python Runner (Backed by SandboxRunner)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class SandboxedPythonRunner:
-    """Run generated Python in a network-isolated bubblewrap sandbox.
+from sandbox_runner import SandboxRunner, SandboxMode, ExecutionResult
 
-    Supports two modes:
-    - Isolated (default): No project access, no network. For untrusted snippets.
-    - Project-aware: Mounts CODING_READ_ROOT as read-only so tests can import
-      project modules. Optionally allows network for API testing.
+
+class SandboxedPythonRunner:
+    """Run generated Python in a network-isolated sandbox with tiered fallback.
+
+    Supports:
+    - Snippet mode: Isolated temporary directory.
+    - Project-aware mode: Read-only project mount or copy-on-write mirror.
+    - Test suite execution: Running pytest / unittest in isolated workspaces.
     """
 
     def __init__(self, timeout_seconds: int = 10, max_output_bytes: int = 16_384) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_output_bytes = max_output_bytes
         self.verifier = Verifier()
+        self._runner = SandboxRunner(
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
 
     def run(
         self,
@@ -350,117 +357,29 @@ class SandboxedPythonRunner:
         project_aware: bool = False,
         allow_network: bool = False,
     ) -> dict[str, Any]:
-        """Execute valid Python in the sandbox.
+        """Execute valid Python in the sandbox."""
+        mode = SandboxMode.PROJECT_READ_ONLY if project_aware else SandboxMode.SNIPPET
+        res = self._runner.run_code(
+            code=code,
+            mode=mode,
+            project_root=CODING_READ_ROOT if project_aware else None,
+            allow_network=allow_network,
+        )
+        return res.to_dict()
 
-        Args:
-            code: Python source to execute.
-            project_aware: If True, mount CODING_READ_ROOT read-only into the
-                sandbox so the code can import project modules.
-            allow_network: If True, don't isolate the network namespace.
-                Only meaningful when project_aware is True (for API tests).
-        """
-        if not self.verifier.verify_python(code):
-            return {"status": "rejected", "returncode": None, "stdout": "", "stderr": "invalid Python"}
-
-        bubblewrap = shutil.which("bwrap")
-        python = "/usr/bin/python3"
-        if bubblewrap is None or not os.path.exists(python):
-            return {"status": "unavailable", "returncode": None, "stdout": "",
-                    "stderr": "bubblewrap or python3 is unavailable"}
-
-        with tempfile.TemporaryDirectory(prefix="zedek-code-") as workspace:
-            script_path = os.path.join(workspace, "main.py")
-            with open(script_path, "w", encoding="utf-8") as script:
-                script.write(code)
-
-            command = [bubblewrap]
-
-            # Namespace isolation — skip network unshare if network access needed
-            if allow_network and project_aware:
-                command += ["--unshare-pid", "--unshare-uts", "--unshare-ipc"]
-            else:
-                command += ["--unshare-all"]
-
-            command += [
-                "--die-with-parent",
-                "--new-session",
-                "--clearenv",
-                "--setenv", "PATH", "/usr/bin:/bin",
-                "--setenv", "HOME", "/tmp",
-                "--ro-bind", "/usr", "/usr",
-                "--ro-bind", "/bin", "/bin",
-                "--ro-bind", "/lib", "/lib",
-                "--ro-bind", "/lib64", "/lib64",
-                "--proc", "/proc",
-                "--dev", "/dev",
-                "--tmpfs", "/tmp",
-                "--dir", "/sandbox",
-                "--ro-bind", script_path, "/sandbox/main.py",
-            ]
-
-            # Network support: bind resolv.conf and SSL certs
-            if allow_network and project_aware:
-                if os.path.exists("/etc/resolv.conf"):
-                    command += ["--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf"]
-                if os.path.isdir("/etc/ssl"):
-                    command += ["--ro-bind", "/etc/ssl", "/etc/ssl"]
-                # Python may need ca-certificates
-                if os.path.isdir("/etc/pki"):
-                    command += ["--ro-bind", "/etc/pki", "/etc/pki"]
-
-            # Project-aware mode: mount read roots
-            if project_aware and os.path.isdir(CODING_READ_ROOT):
-                command += ["--ro-bind", CODING_READ_ROOT, CODING_READ_ROOT]
-                # Also set PYTHONPATH so imports work
-                command += ["--setenv", "PYTHONPATH", CODING_READ_ROOT]
-
-            command += [
-                "--chdir", "/sandbox",
-                "--", python, "/sandbox/main.py",
-            ]
-
-            log.info("sandbox_run", extra={
-                "project_aware": project_aware,
-                "allow_network": allow_network,
-            })
-
-            try:
-                completed = subprocess.run(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    start_new_session=True,
-                    preexec_fn=lambda: _apply_resource_limits(self.timeout_seconds),
-                )
-            except subprocess.TimeoutExpired as error:
-                return {
-                    "status": "timeout",
-                    "returncode": None,
-                    "stdout": (error.stdout or "")[: self.max_output_bytes],
-                    "stderr": (error.stderr or "")[: self.max_output_bytes],
-                }
-            except OSError as error:
-                return {"status": "unavailable", "returncode": None, "stdout": "", "stderr": str(error)}
-
-        return {
-            "status": (
-                "passed"
-                if completed.returncode == 0
-                else (
-                    "unavailable"
-                    if "Creating new namespace failed" in completed.stderr
-                    or "Resource temporarily unavailable" in completed.stderr
-                    else "failed"
-                )
-            ),
-            "returncode": completed.returncode,
-            "stdout": completed.stdout[: self.max_output_bytes],
-            "stderr": completed.stderr[: self.max_output_bytes],
-        }
+    def run_tests(
+        self,
+        project_root: str = CODING_READ_ROOT,
+        test_args: list[str] | None = None,
+        allow_network: bool = False,
+    ) -> dict[str, Any]:
+        """Run a test suite in an isolated copy-on-write project mirror."""
+        res = self._runner.run_test_suite(
+            project_root=project_root,
+            test_args=test_args,
+            allow_network=allow_network,
+        )
+        return res.to_dict()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

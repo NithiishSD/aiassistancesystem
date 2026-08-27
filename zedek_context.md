@@ -564,10 +564,20 @@ instruction.
    - **`semantic_scholar_tools`** (`mcp_semantic_scholar_server.py`): Academic paper research
      (`scholar_search_papers`, `scholar_paper_details`, `scholar_paper_citations`, `scholar_author_papers`).
    - `tests/test_mcp_expansion_servers.py`: Unit and mock tests for all expansion servers.
-   Full test suite: **198 passed, 0 failures** (was 188).
-7. **Expand sandboxed execution carefully** to support isolated test runs;
-   the current bubblewrap runner handles Python snippets only and does not
-   expose the repository or arbitrary shell commands.
+7. **Tiered & Isolated Sandboxed Execution Engine (COMPLETED)**
+   Built dedicated [`sandbox_runner.py`](file:///home/nithiish/Desktop/aiassistancesystem/sandbox_runner.py) to support full test suites and snippets:
+   - **Tiered Backend Architecture**: Linux namespace isolation with `bwrap` when permitted;
+     graceful fallback to Process Isolation with OS resource limits (`setrlimit` CPU, AS 512MB,
+     NPROC 64, FSIZE 10MB) + clean ephemeral directories on AppArmor-restricted kernels.
+   - **Multi-Mode Support**:
+     - `SNIPPET`: Stateless Python string execution in empty temp directory.
+     - `PROJECT_READ_ONLY`: Project files mounted/read-only with PYTHONPATH configured.
+     - `PROJECT_COPY_ON_WRITE`: Fast workspace mirroring for isolated test runs (`pytest`, `unittest`)
+       ensuring tests, artifacts, and bytecode caches never pollute or mutate the original repository.
+   - Integrated into `coding_agent.py`'s `SandboxedPythonRunner` with full backward compatibility.
+   - `tests/test_sandbox_runner.py`: 9 tests verifying syntax pre-checks, snippet runs, timeout protection,
+     and copy-on-write isolation guarantees.
+   Full test suite: **207 passed, 0 failures** (was 198).
 8. **Evaluator/verifier agent** — separate from the task agent and the
    watchdog, ideally using a different model than whichever one performed
    the task, to catch hallucinated/wrong content (see known issue #3 above,
