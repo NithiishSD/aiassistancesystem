@@ -505,21 +505,41 @@ instruction.
    - `orchestrator.py`: Startup discovery, schema-driven argument extraction, JSON schema
      validation via `jsonschema`, and `_execute_mcp_tool()` with internal tier gate enforcement.
    - `tests/test_mcp_client.py`: 25 comprehensive unit and real-STDIO integration tests.
-     All 115 total tests in the project suite pass.
-4. **Expand sandboxed execution carefully** to support isolated test runs;
+     All 115 total tests in the project suite pass (152 after Phase 5 below).
+4. **Read-only online MCP server (COMPLETED)** — `mcp_online_server.py` adds live
+   internet access to the assistant via three pure-Python, read-only MCP tools:
+   - `fetch_url(url)`: HTTP GET any public URL; returns clean stripped text.
+     SSRF-guarded: all private/loopback/link-local ranges (127/8, 10/8, 172.16/12,
+     192.168/16, 169.254/16, IPv6 loopback/ULA/link-local) and `localhost` are
+     blocked before any I/O. Fail-closed on DNS failure.
+   - `search_wikipedia(query, limit)`: Wikipedia OpenSearch + REST Summary API.
+   - `search_arxiv(query, max_results)`: arXiv Atom feed; returns titles, authors,
+     published dates, and abstracts.
+   All tools: explicit `httpx.Timeout(connect=10, read=20)` independent of MCP server
+   timeout; identifying `User-Agent` header per Wikipedia/arXiv API ToS; graceful
+   `[error]`/`[blocked]` string returns — no exceptions propagate to caller.
+   Registered as `online_tools` in `mcp_servers.json` (array schema, timeout 15 s).
+   `tests/test_mcp_online.py`: 37 tests covering SSRF blocklist, HTML helpers,
+   tier-gate no-false-escalation (including `write`-in-query collision regression test),
+   and mocked HTTP responses for all three tools. Full suite: **152 passed, 0 failures**.
+   **Next (separate pass):** verb-escalation expansion in `tier_gate.py` (action-verb
+   Tier 2 patterns distinguishing world-mutating effects from input descriptions),
+   `default_tier` ceiling-raiser in `mcp_servers.json`, and associated test coverage.
+   Do NOT wire Puppeteer/Playwright/GitHub-write until that pass is complete and green.
+5. **Expand sandboxed execution carefully** to support isolated test runs;
    the current bubblewrap runner handles Python snippets only and does not
    expose the repository or arbitrary shell commands.
-5. **Evaluator/verifier agent** — separate from the task agent and the
+6. **Evaluator/verifier agent** — separate from the task agent and the
    watchdog, ideally using a different model than whichever one performed
    the task, to catch hallucinated/wrong content (see known issue #3 above,
    still unresolved). This should review patch correctness, test results,
    and whether the agent stayed within the user's actual intent.
-6. **Task planner / decomposer agent (optional but useful)** — a lightweight
+7. **Task planner / decomposer agent (optional but useful)** — a lightweight
    planning pass that breaks a large request into concrete sub-tasks and
    dependency order before execution. This can be implemented as a small,
    specialized planner rather than a full multi-agent company model.
-7. **Remaining specialist agents**: research/RAG agent, web/browser agent.
-8. **Watchdog module** — separate process, observes agent actions against
+8. **Remaining specialist agents**: research/RAG agent, web/browser agent.
+9. **Watchdog module** — separate process, observes agent actions against
    stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
    scaffolded in design but Tier 3 execution is currently OFF, so this
    isn't urgent yet.
