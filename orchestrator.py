@@ -24,12 +24,29 @@ import memory
 import classifier
 import llm_provider
 from coding_agent import CodingSpecialist
+import mcp_client
 
 log = get_logger("orchestrator")
 
 ROUTING_MODEL = "llama3.1:8b"
 CODING_SPECIALIST = CodingSpecialist()
 LAST_ROUTING_DECISION: dict | None = None
+
+
+def _init_mcp() -> None:
+    """Discover MCP tools at startup. Failure is isolated and logged."""
+    try:
+        tools = mcp_client.discover_all_tools()
+        stats = mcp_client.get_discovery_stats()
+        log.info("mcp_discovery_complete", extra=stats)
+        if tools:
+            classifier.register_mcp_tools(tools)
+    except Exception as e:
+        log.info("mcp_discovery_failed", extra={"error": str(e)})
+
+
+_init_mcp()
+
 
 # Path for dynamically learned/verified system inspection commands
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -345,6 +362,8 @@ def route_request(user_input: str) -> dict:
             decision["args"] = {"app_name": _extract_application_name(user_input)}
         else:
             decision["args"] = _extract_args(func_name, user_input)
+    elif func_name == "mcp_tool" or (func_name and func_name.startswith("mcp_")):
+        decision["args"] = _extract_mcp_args(user_input, target_tool_qname=func_name if func_name.startswith("mcp_") else None)
     else:
         decision["args"] = {}
 
@@ -431,6 +450,137 @@ Request: {user_input}"""
         return json.loads(response["message"]["content"])
     except json.JSONDecodeError:
         return {}
+
+
+def _select_mcp_tool(user_input: str, target_tool_qname: str | None = None) -> mcp_client.MCPToolSpec | None:
+    """Select which registered MCP tool best matches the request."""
+    registry = mcp_client.get_tool_registry()
+    if not registry:
+        return None
+
+    if target_tool_qname and target_tool_qname in registry:
+        return registry[target_tool_qname]
+
+    lowered = (user_input or "").lower()
+
+    # 1. Exact or keyword matches against tool names
+    for qname, spec in registry.items():
+        tname = spec.tool_name.lower().replace("_", " ")
+        if tname in lowered:
+            return spec
+
+    if any(w in lowered for w in ["time", "date", "clock", "today", "now"]):
+        for qname, spec in registry.items():
+            if "time" in spec.tool_name or "date" in spec.tool_name:
+                return spec
+
+    if any(w in lowered for w in ["word", "words", "count", "character", "chars", "lines", "length"]):
+        for qname, spec in registry.items():
+            if "word" in spec.tool_name or "count" in spec.tool_name:
+                return spec
+
+    if any(w in lowered for w in ["summar", "brief", "shorten", "overview", "tldr"]):
+        for qname, spec in registry.items():
+            if "summar" in spec.tool_name:
+                return spec
+
+    if len(registry) == 1:
+        return next(iter(registry.values()))
+
+    # 2. Semantic selection via LLM if multiple tools exist
+    tool_list_str = "\n".join(f"- {spec.qualified_name}: {spec.description}" for spec in registry.values())
+    prompt = (
+        f"Pick the single most appropriate tool for this user request from the list below.\n"
+        f"User request: '{user_input}'\n"
+        f"Available tools:\n{tool_list_str}\n\n"
+        f"Output ONLY the tool qualified_name (e.g. mcp_zedek_tools_current_time). No explanation."
+    )
+    try:
+        res = llm_provider.generate_chat([{"role": "user", "content": prompt}], task="process_reasoning")
+        chosen = res.get("answer", "").strip()
+        for qname, spec in registry.items():
+            if qname in chosen:
+                return spec
+    except Exception:
+        pass
+
+    return next(iter(registry.values())) if registry else None
+
+
+def _extract_target_text(user_input: str) -> str:
+    """Extract payload text from requests like 'count words in hello world'."""
+    text = (user_input or "").strip()
+    match = re.search(r'["\'](.*?)["\']', text)
+    if match:
+        return match.group(1).strip()
+
+    cleaned = re.sub(
+        r'^(?:(?:hey|hi|hello|zedek|yo)\s*,?\s*)*'
+        r'(?:(?:please|pls|can\s+you|could\s+you|would\s+you|help\s+me)\s+)*'
+        r'(?:count\s+(?:the\s+)?(?:words|characters|chars|lines)\s+(?:in|of|for)?|'
+        r'how\s+many\s+words\s+(?:are\s+)?(?:in|of)?|'
+        r'summarize\s+(?:this\s+)?(?:text|paragraph|article)?|'
+        r'word\s+count\s+(?:for|of|in)?)\s*',
+        '',
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or text
+
+
+def _extract_mcp_args(user_input: str, target_tool_qname: str | None = None) -> dict:
+    """Extract arguments for an MCP tool based on its JSON input schema."""
+    tool_spec = _select_mcp_tool(user_input, target_tool_qname)
+    if not tool_spec:
+        return {"qualified_name": "", "tool_args": {}}
+
+    schema = tool_spec.input_schema or {}
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+
+    if not properties and not required:
+        return {"qualified_name": tool_spec.qualified_name, "tool_args": {}}
+
+    # Common pattern: single text parameter
+    if list(properties.keys()) == ["text"]:
+        text_arg = _extract_target_text(user_input)
+        return {"qualified_name": tool_spec.qualified_name, "tool_args": {"text": text_arg}}
+
+    # General schema-driven extraction via narrow Llama call
+    arg_prompt = f"""Extract arguments for the tool "{tool_spec.tool_name}" with JSON schema:
+{json.dumps(schema, indent=2)}
+
+Request: {user_input}
+
+Respond ONLY with a JSON object of argument names to values. If no arguments are mentioned, respond with {{}}."""
+    try:
+        response = ollama.chat(
+            model=ROUTING_MODEL,
+            messages=[{"role": "user", "content": arg_prompt}],
+            format="json",
+        )
+        parsed = json.loads(response["message"]["content"])
+        if isinstance(parsed, dict):
+            return {"qualified_name": tool_spec.qualified_name, "tool_args": parsed}
+    except Exception:
+        pass
+
+    return {"qualified_name": tool_spec.qualified_name, "tool_args": {}}
+
+
+def _validate_mcp_args(args: dict, schema: dict) -> str | None:
+    """Returns an error message string if arguments fail JSON schema validation, else None."""
+    if not schema:
+        return None
+    try:
+        import jsonschema
+        jsonschema.validate(instance=args, schema=schema)
+        return None
+    except jsonschema.ValidationError as e:
+        return e.message
+    except Exception as e:
+        return str(e)
+
 
 
 def _handle_correction(raw_text: str, domain: str) -> str:
@@ -647,6 +797,65 @@ def format_coding_plan(plan: dict) -> str:
     )
 
 
+def _execute_mcp_tool(decision: dict) -> str:
+    """Dispatch to MCP layer. Tier gate is called internally — callers need not."""
+    args_dict = decision.get("args", {})
+    qualified_name = args_dict.get("qualified_name", "")
+    tool_args = args_dict.get("tool_args", {})
+    original_input = decision.get("_original_input", "")
+
+    if not qualified_name:
+        # Try finding tool directly from original input
+        spec = _select_mcp_tool(original_input)
+        if spec:
+            qualified_name = spec.qualified_name
+            tool_args = _extract_mcp_args(original_input, target_tool_qname=qualified_name).get("tool_args", {})
+
+    if not qualified_name:
+        log.info("mcp_tool_execution_missing_target", extra={"user_input": original_input})
+        return "No matching MCP tool found for this request."
+
+    registry = mcp_client.get_tool_registry()
+    if qualified_name not in registry:
+        log.info("mcp_tool_execution_unknown_tool", extra={"qualified_name": qualified_name})
+        return f"Unknown MCP tool: '{qualified_name}'."
+
+    tool_spec = registry[qualified_name]
+    arg_error = _validate_mcp_args(tool_args, tool_spec.input_schema)
+    if arg_error:
+        log.info("mcp_tool_schema_validation_failed", extra={"qualified_name": qualified_name, "error": arg_error})
+        return f"Invalid arguments for {tool_spec.tool_name}: {arg_error}"
+
+    # Always pass through gate() — never bypassed
+    gate_decision = gate(qualified_name, tool_args, user_input=original_input)
+    if gate_decision["action"] == "blocked":
+        return gate_decision["message"]
+    if gate_decision["action"] == "confirm":
+        print(gate_decision["message"])
+        answer = input("> ").strip().lower()
+        if answer != "y":
+            log.info("mcp_tool_confirmation_denied", extra={"qualified_name": qualified_name})
+            return "Cancelled."
+        log.info("mcp_tool_confirmation_granted", extra={"qualified_name": qualified_name})
+    if gate_decision["action"] == "notify":
+        print(gate_decision["message"])
+
+    result = mcp_client.call_mcp_tool(qualified_name, tool_args)
+    if result.get("error"):
+        log.info("mcp_tool_execution_error", extra={"qualified_name": qualified_name, "error": result["error"]})
+        return f"MCP tool error: {result['error']}"
+
+    output = result.get("result", "")
+    log.info("mcp_tool_execution_success", extra={"qualified_name": qualified_name})
+
+    if decision.get("via_llm"):
+        classifier.add_utterance_dynamically(original_input, "mcp_tool")
+
+    if output is None or output == "":
+        return "(no output)"
+    return str(output)
+
+
 def execute(decision: dict) -> str:
     """Validates the routing decision against the allowlist, runs it through
     the tier gate, and executes only if the gate allows it."""
@@ -777,6 +986,9 @@ def execute(decision: dict) -> str:
         log.info("unsupported_capability_requested", extra={"reason": reason,
                                                                "user_input": decision.get("_original_input", "")})
         return f"That capability ({reason}) isn't built yet — it's on the roadmap and still in progress."
+
+    if func_name == "mcp_tool" or (func_name and func_name.startswith("mcp_")):
+        return _execute_mcp_tool(decision)
 
     if func_name not in AVAILABLE_FUNCTIONS:
         log.info("execution_blocked_not_in_allowlist", extra={"attempted_function": func_name})

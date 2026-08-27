@@ -127,6 +127,16 @@ ROUTER_TOOLS: list[dict] = [
         ),
     },
     {
+        "name": "mcp_tool",
+        "description": (
+            "User wants to invoke an external MCP-connected tool or service: fetch the "
+            "current time or date, count words in text, summarize text, run a web search, "
+            "query a database, or use any capability provided by a connected MCP server. "
+            "Examples: 'what time is it', 'what is the current time and date', "
+            "'count words in this text', 'give me a word count', 'summarize this paragraph'."
+        ),
+    },
+    {
         "name": "general_question",
         "description": (
             "User is asking a general knowledge question, a conversational question, "

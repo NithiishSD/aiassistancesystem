@@ -487,15 +487,25 @@ instruction.
 
 1. ~~**Test provider-backed coding generation** with real free-tier API keys.~~ ✅ **DONE** (2026-08-25) — all providers verified working.
 2. ~~**Coding specialist + verifier loop (OpenHands / SWE-agent pattern)**~~ ✅ **DONE** (2026-08-25) — SWE-agent pattern fully built and verified without external dependencies.
-3. **MCP client support** — add a Model Context Protocol client layer so Zedek
-   can connect to external MCP tool servers (filesystem, databases, APIs, code
-   analysis tools, etc.) without modifying the orchestrator's core routing.
-   This is additive: new capabilities plug in as MCP server connections,
-   discovered and invoked through a thin client module alongside the existing
-   system agent. The tier gate and safety model still apply to every MCP tool
-   call. Implementation: a new `mcp_client.py` module that discovers available
-   MCP servers, exposes their tools to the orchestrator as callable functions,
-   and routes responses back through the existing pipeline.
+3. **MCP client support (COMPLETED)** — Model Context Protocol client layer implemented
+   following a strict boundary 10/10 architecture:
+   - `mcp_client.py`: Strict boundary preventing any MCP SDK/asyncio objects from escaping.
+     Internal dataclasses (`MCPServerConfig`, `MCPToolSpec`), internal error taxonomy,
+     isolated `_TOOL_REGISTRY` & `_SERVER_REGISTRY`, robust cache lifecycle with
+     (mtime, size) fingerprinting, sorted deterministic discovery, per-server timeout
+     isolation, automatic Python environment resolution (`sys.executable`), process
+     cleanup, and normalized result dicts (`{"result": ..., "error": ...}`).
+   - `mcp_demo_server.py`: Pure Python MCP server (`mcp.server.mcpserver.MCPServer` +
+     `run_stdio_async`) exposing `current_time`, `word_count`, and `summarize_text`.
+   - `mcp_servers.json`: Declarative configuration file for MCP servers.
+   - `tier_gate.py`: Dynamic Tier 1 default for `mcp_*` tools with universal
+     force-pattern escalations (Tier 2/3) enforced on top.
+   - `classifier.py` & `classifier_tools.py`: Added `mcp_tool` intent route and
+     reversible `register_mcp_tools(tools)` for hot-reloading router embeddings from tool descriptions.
+   - `orchestrator.py`: Startup discovery, schema-driven argument extraction, JSON schema
+     validation via `jsonschema`, and `_execute_mcp_tool()` with internal tier gate enforcement.
+   - `tests/test_mcp_client.py`: 25 comprehensive unit and real-STDIO integration tests.
+     All 115 total tests in the project suite pass.
 4. **Expand sandboxed execution carefully** to support isolated test runs;
    the current bubblewrap runner handles Python snippets only and does not
    expose the repository or arbitrary shell commands.

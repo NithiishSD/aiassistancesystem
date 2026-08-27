@@ -26,3 +26,57 @@
 {"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "build a webite for grocery shop", "timestamp": "2026-08-25 20:14:32,558", "module": "system_agent"}
 {"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "can you build me a website for grocery store", "timestamp": "2026-08-25 20:17:27,307", "module": "system_agent"}
 {"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "can you build me a website for grocery store", "timestamp": "2026-08-25 20:17:27,310", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "brave", "timestamp": "2026-08-26 19:58:34,486", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "brave", "resolved_path": "/snap/bin/brave", "timestamp": "2026-08-26 19:58:34,488", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 20:00:04,733", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 20:00:04,737", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "its App center", "timestamp": "2026-08-26 20:00:16,402", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "its App center", "timestamp": "2026-08-26 20:00:16,403", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "center", "timestamp": "2026-08-26 20:00:29,730", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "center", "timestamp": "2026-08-26 20:00:29,731", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "Appcenter", "timestamp": "2026-08-26 20:00:38,548", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "Appcenter", "timestamp": "2026-08-26 20:00:38,552", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "AppCenter", "timestamp": "2026-08-26 20:00:51,107", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "AppCenter", "timestamp": "2026-08-26 20:00:51,108", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "App Center", "timestamp": "2026-08-26 20:00:58,918", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "App Center", "timestamp": "2026-08-26 20:00:58,919", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "files", "timestamp": "2026-08-26 20:01:10,929", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "files", "timestamp": "2026-08-26 20:01:10,930", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 20:01:26,439", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 20:01:26,440", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 20:08:50,316", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "appcenter", "resolved_cmd": ["/snap/bin/snap-store"], "display_name": "Appcenter", "timestamp": "2026-08-26 20:08:50,317", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 20:08:50,317", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "trash", "resolved_cmd": ["gio", "open", "trash:///"], "display_name": "Trash", "timestamp": "2026-08-26 20:08:50,317", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:08:50,318", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:08:50,324", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 20:09:09,399", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "appcenter", "resolved_cmd": ["/snap/bin/snap-store"], "display_name": "Appcenter", "timestamp": "2026-08-26 20:09:09,399", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 20:09:09,400", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "trash", "resolved_cmd": ["gio", "open", "trash:///"], "display_name": "Trash", "timestamp": "2026-08-26 20:09:09,400", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:09:09,401", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:09:09,411", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 20:09:55,034", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "appcenter", "resolved_cmd": ["/snap/bin/snap-store"], "display_name": "Appcenter", "timestamp": "2026-08-26 20:09:55,035", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 20:09:55,035", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "trash", "resolved_cmd": ["gio", "open", "trash:///"], "display_name": "Trash", "timestamp": "2026-08-26 20:09:55,036", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:09:55,038", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:09:55,050", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 20:21:24,587", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "appcenter", "resolved_cmd": ["/snap/bin/snap-store"], "display_name": "Appcenter", "timestamp": "2026-08-26 20:21:24,588", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 20:21:24,588", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "trash", "resolved_cmd": ["gio", "open", "trash:///"], "display_name": "Trash", "timestamp": "2026-08-26 20:21:24,588", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:21:24,589", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 20:21:24,595", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-26 22:56:00,047", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "appcenter", "resolved_cmd": ["/snap/bin/snap-store"], "display_name": "Appcenter", "timestamp": "2026-08-26 22:56:00,047", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-26 22:56:00,047", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "trash", "resolved_cmd": ["gio", "open", "trash:///"], "display_name": "Trash", "timestamp": "2026-08-26 22:56:00,047", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 22:56:00,048", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-26 22:56:00,074", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "appcenter", "timestamp": "2026-08-27 10:48:05,504", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "appcenter", "resolved_cmd": ["/snap/bin/snap-store"], "display_name": "Appcenter", "timestamp": "2026-08-27 10:48:05,505", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "trash", "timestamp": "2026-08-27 10:48:05,505", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_launched", "taskName": null, "app_name": "trash", "resolved_cmd": ["gio", "open", "trash:///"], "display_name": "Trash", "timestamp": "2026-08-27 10:48:05,505", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_called", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-27 10:48:05,506", "module": "system_agent"}
+{"levelname": "INFO", "message": "open_application_not_found", "taskName": null, "app_name": "non_existent_fake_app_12345_xyz", "timestamp": "2026-08-27 10:48:05,513", "module": "system_agent"}

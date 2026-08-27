@@ -29,3 +29,7 @@ requests==2.32.3
 
 # --- Logging (structured JSON) ---
 python-json-logger==2.0.7
+
+# --- Model Context Protocol (MCP) Client ---
+mcp>=2.0.0
+jsonschema>=4.0.0

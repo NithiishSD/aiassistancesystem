@@ -218,6 +218,15 @@ INTENT_UTTERANCES = {
         "show system uptime and hostname",
         "what is my local IP address",
     ],
+    "mcp_tool": [
+        "Use an external connected MCP tool or service to get information, query data, count words, check time, or run a task.",
+        "what time is it right now",
+        "tell me the current date and time",
+        "count the words in this text",
+        "how many words are in this paragraph",
+        "give me a brief summary of this text",
+        "what is the current time and date",
+    ],
 }
 
 DOMAIN_UTTERANCES = {
@@ -455,6 +464,57 @@ def add_utterance_dynamically(text: str, intent: str) -> bool:
     _intent_router = _build_intent_router()
     log.info("intent_router_rebuilt", extra={"intent": intent})
     return True
+
+
+# ── Dynamic MCP tool registration (reversible) ───────────────────────────────
+
+_MCP_REGISTERED_UTTERANCES: list[str] = []
+
+
+def register_mcp_tools(tools: list) -> None:
+    """Register discovered MCP tool descriptions into the mcp_tool intent router.
+
+    - Reversibly removes any previously registered MCP phrases from dynamic storage.
+    - Extracts descriptions and adds clean phrases for each MCP tool.
+    - Atomically rebuilds the in-memory RouteLayer.
+    - Preserves all static utterances and non-MCP dynamic utterances intact.
+    """
+    global _intent_router, _MCP_REGISTERED_UTTERANCES, _ROUTING_CACHE
+
+    _ROUTING_CACHE.clear()
+    data = _load_dynamic_utterances()
+
+    # Remove previous MCP tool registrations
+    if "mcp_tool" in data and _MCP_REGISTERED_UTTERANCES:
+        data["mcp_tool"] = [
+            phrase for phrase in data["mcp_tool"]
+            if phrase not in _MCP_REGISTERED_UTTERANCES
+        ]
+        if not data["mcp_tool"]:
+            del data["mcp_tool"]
+
+    # Extract new utterances from tools, sorted deterministically
+    new_utterances: list[str] = []
+    for tool in sorted(tools, key=lambda t: getattr(t, "qualified_name", "")):
+        desc = getattr(tool, "description", "") or ""
+        tool_name = getattr(tool, "tool_name", "") or ""
+        if desc:
+            phrase = f"{tool_name}: {desc}"
+            if len(phrase.split()) <= MAX_DYNAMIC_WORDS:
+                new_utterances.append(phrase)
+            elif desc and len(desc.split()) <= MAX_DYNAMIC_WORDS:
+                new_utterances.append(desc)
+
+    if new_utterances:
+        existing = data.setdefault("mcp_tool", [])
+        for u in new_utterances:
+            if u not in existing:
+                existing.append(u)
+
+    _MCP_REGISTERED_UTTERANCES = new_utterances
+    _save_dynamic_utterances(data)
+    _intent_router = _build_intent_router()
+    log.info("mcp_tools_registered_in_classifier", extra={"tool_count": len(tools), "utterance_count": len(new_utterances)})
 
 
 # ── LLM escalation (Layer 2) ─────────────────────────────────────────────────

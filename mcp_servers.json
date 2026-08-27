@@ -1,0 +1,10 @@
+[
+  {
+    "name": "zedek_tools",
+    "description": "Bundled Zedek utility tools (no external deps, pure Python)",
+    "command": "python3",
+    "args": ["-m", "mcp_demo_server"],
+    "cwd": ".",
+    "timeout": 10
+  }
+]

@@ -56,11 +56,15 @@ def classify(func_name: str, args: dict, user_input: str = "") -> int:
     the user said without surviving into the function's actual arguments,
     and that gap should not silently downgrade the tier.
     """
-    if func_name not in FUNCTION_TIERS:
+    if func_name in FUNCTION_TIERS:
+        base_tier = FUNCTION_TIERS[func_name]
+    elif func_name.startswith("mcp_") or func_name == "mcp_tool":
+        # MCP tools: default Tier 1 (notify) — visible/transparent execution
+        # Force-patterns (Tier 2/3) still apply on top
+        base_tier = 1
+    else:
         log.info("unknown_function_fail_safe", extra={"function": func_name})
         return 3  # unknown function = treat as highest risk, blocks by default
-
-    base_tier = FUNCTION_TIERS[func_name]
 
     arg_text = " ".join(str(v).lower() for v in args.values())
     combined_text = f"{arg_text} {user_input.lower()}"
