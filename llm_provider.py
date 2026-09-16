@@ -58,6 +58,8 @@ TASK_PROVIDERS: dict[str, list[str]] = {
     "general_qa": ["gemini", "groq", "cerebras", "local"],
     "fact_handling": ["gemini", "groq", "local"],
     "process_reasoning": ["openrouter", "gemini", "cerebras", "local"],
+    "planning": ["groq", "gemini", "cerebras", "local"],
+    "research": ["gemini", "groq", "cerebras", "local"],
 }
 DEFAULT_CHAIN = ["gemini", "groq", "nvidia_nim", "openrouter", "cerebras", "local"]
 

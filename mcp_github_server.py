@@ -72,7 +72,7 @@ def _get(path: str, params: dict | None = None) -> dict | str:
     try:
         return resp.json()
     except Exception:
-        return f"[error] Failed to parse GitHub response."
+        return "[error] Failed to parse GitHub response."
 
 
 # ── Server setup ──────────────────────────────────────────────────────────────

@@ -104,8 +104,7 @@ def get_weather_forecast(location: str) -> str:
         return "[error] Location must not be empty."
 
     # wttr.in 'v2' format gives structured forecast
-    url = f"https://wttr.in/{quote(location.strip())}?format=%l:+%c+%t+%w&lang=en"
-    # Use the detailed multi-line format for forecast
+    # Detailed multi-line format for the forecast
     url_full = f"https://wttr.in/{quote(location.strip())}?1n&lang=en"
     try:
         with httpx.Client(timeout=_TIMEOUT) as client:

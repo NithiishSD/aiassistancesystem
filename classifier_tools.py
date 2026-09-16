@@ -127,6 +127,41 @@ ROUTER_TOOLS: list[dict] = [
         ),
     },
     {
+        "name": "research_task",
+        "description": (
+            "User wants a topic researched against real sources and answered with citations: "
+            "looking something up online, reading a URL they provided, or finding academic "
+            "papers and studies on arXiv or Semantic Scholar. "
+            "Choose this over general_question when the user explicitly wants sources, "
+            "citations, papers, or something looked up rather than answered from memory. "
+            "Examples: 'research what the latest papers say about transformers', "
+            "'look this up online and cite your sources', 'find studies on spaced repetition', "
+            "'read https://example.com/article and summarize it'."
+        ),
+    },
+    {
+        "name": "academic_tracking",
+        "description": (
+            "User wants to log or review their DSA / aptitude / placement-prep practice: "
+            "recording that they solved or failed a practice problem, asking which topics "
+            "are weakest, what to study next, or how their progress and streak look. "
+            "Examples: 'log that I solved a DP problem', 'I failed a graphs question today', "
+            "'what are my weak topics', 'what should I practice next', 'show my prep progress'."
+        ),
+    },
+    {
+        "name": "web_task",
+        "description": (
+            "User wants a live web page ACTED ON in a real browser: navigating to a site, "
+            "clicking a button or link, typing into a form field, or taking a screenshot. "
+            "Choose this over research_task when the user wants interaction with a page "
+            "rather than information gathered from sources. Every such action requires "
+            "the user's explicit confirmation before it runs. "
+            "Examples: 'open this site and click the login button', "
+            "'type my email into the form on that page', 'take a screenshot of this web page'."
+        ),
+    },
+    {
         "name": "mcp_tool",
         "description": (
             "User wants to invoke an external MCP-connected tool or service: fetch the "

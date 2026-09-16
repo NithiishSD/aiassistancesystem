@@ -239,8 +239,6 @@ def cf_contest_list(show_upcoming: bool = True, max_results: int = 5) -> str:
     if isinstance(result, str):
         return result
 
-    now = datetime.now(tz=timezone.utc).timestamp()
-
     if show_upcoming:
         contests = [c for c in result if c.get("phase") == "BEFORE"]
         contests.sort(key=lambda c: c.get("startTimeSeconds", 0))

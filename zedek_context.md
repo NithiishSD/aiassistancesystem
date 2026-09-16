@@ -590,24 +590,122 @@ instruction.
    - Integrated into `coding_agent.py` (`Verifier` and `CodingSpecialist.implement_and_verify()` retry loop).
    - `tests/test_evaluator_agent.py`: 14 tests covering all three pillars, schema validation, and pipeline integration.
    Full test suite: **221 passed, 0 failures** (was 207).
-9. **Task planner / decomposer agent (optional but useful)** — a lightweight
-   planning pass that breaks a large request into concrete sub-tasks and
-   dependency order before execution. This can be implemented as a small,
-   specialized planner rather than a full multi-agent company model.
-10. **Remaining specialist agents**: research/RAG agent, web/browser agent.
-11. **Watchdog module** — separate process, observes agent actions against
-    stated plans, two-checkpoint flow for Tier 3 (pre-fill, pre-submit) —
-    scaffolded in design but Tier 3 execution is currently OFF, so this
-    isn't urgent yet.
-12. **Security module** — confirmation word + rotation, voice-print
-    verification (in scope per user, not deferred), separate voice listener,
-    password-gated UI panel, isolated encrypted local storage. Not started.
-13. **Wake-word general Q&A mode** — always-on lightweight listener, separate
-    from the security module's voice channel.
-14. **Academic/placement-prep tracking** — the actual "personal tutor" use
-    case (DSA/aptitude practice tracking, weak-topic identification) hasn't
-    been built yet; this was identified as the real differentiator the user
-    wants but is still just a stated goal, not implemented.
+9. **Task planner / decomposer agent (COMPLETED)** — [`task_planner.py`](file:///home/nithiish/Desktop/aiassistancesystem/task_planner.py)
+   breaks a bundled request into ordered atomic sub-requests before execution.
+   - `should_decompose()`: regex-only heuristic (no LLM call) biased toward false
+     negatives — sequence words, semicolons, numbered lists, or 3+ action verbs
+     trigger it. A bare "and" ("open brave and vscode") deliberately does NOT.
+   - `decompose()`: LLM pass (`task="planning"`) returning atomic sub-requests, capped
+     at 5. Degrades to a punctuation split, then to the unchanged original — it never raises.
+   - `{{result_of_N}}` placeholders let a later sub-task consume an earlier one's answer.
+   - `orchestrator.handle()` refactored into `_handle_single()` / `_handle_decomposed()`;
+     each sub-task runs through the normal routing + tier gate path, nothing bypasses it.
+   - `tests/test_task_planner.py`: 19 tests. Suite: **240 passed**.
+10. **Remaining specialist agents (COMPLETED)**
+    - **Research / RAG agent** ([`research_agent.py`](file:///home/nithiish/Desktop/aiassistancesystem/research_agent.py)):
+      plan queries → gather → synthesize with `[S1]`-style inline citations.
+      Sources: ChromaDB memory + Wikipedia/arXiv/Semantic Scholar/direct URL fetch.
+      Explicit read-only tool allowlist; **every** MCP call passes `gate()`, and a
+      blocked *or* confirmation-gated tool is skipped rather than auto-approved
+      (research runs unattended, so it must never self-confirm). Zero sources ⇒ it
+      says so instead of answering from model recall. New `"research"` task profile.
+      Intent `research_task` registered in `classifier.py` + `classifier_tools.py`.
+      `tests/test_research_agent.py`: 27 tests.
+    - **Web / browser agent** ([`web_agent.py`](file:///home/nithiish/Desktop/aiassistancesystem/web_agent.py)):
+      bounded observe → act loop over the Playwright MCP tools. Note those tools are
+      **stateless** — each call reloads the page from an explicit URL — so the loop is a
+      sequence of self-contained operations, not a session walk. Browser-tool allowlist,
+      http(s)-only URL validation ahead of the gate, and a 4-step budget. Tier 2
+      confirmation is **injected** (`confirm_fn`); the default callback denies and the
+      orchestrator passes the interactive prompt, so the agent can never self-approve.
+      A denied or blocked action ends the loop rather than routing around the refusal.
+      Intent `web_task` registered. `tests/test_web_agent.py`: 28 tests.
+11. **Watchdog module (COMPLETED)** — [`watchdog.py`](file:///home/nithiish/Desktop/aiassistancesystem/watchdog.py)
+    answers the question the tier gate cannot: *is this the action the agent said it
+    would take?* An agent that declares a read-only plan and then writes elsewhere
+    trips no single high-tier action, but has deviated from stated intent.
+    - `register_plan()` / `observe()`: an undeclared action at Tier 2+ is refused; an
+      undeclared read-only action is allowed but flagged. An unknown plan fails closed.
+    - Tier 3 two-checkpoint flow (`checkpoint_prefill` → `checkpoint_presubmit`):
+      pre-submit **requires** pre-fill, and while `TIER3_EXECUTION_ENABLED = False`
+      it refuses even on approval — matching the tier gate's system-wide Tier 3 block.
+    - Append-only JSONL audit trail at `logs/watchdog_audit.jsonl`, with sensitive
+      argument values (cvv, ssn, password, token…) redacted before they hit disk.
+      Audit write failures degrade observability, never execution.
+    - **Wired into the coding flow**: the approved plan's declared file writes are
+      registered, and a patch targeting an undeclared file is blocked *before* the
+      apply prompt.
+    - Honest scope note: this runs in-process. It is written as pure state + an
+      append-only trail with no orchestrator dependency so it *can* move
+      out-of-process later, but no IPC boundary exists today.
+    - `tests/test_watchdog.py`: 26 tests.
+12. **Security module (COMPLETED — except the audio backend)** —
+    [`security_module.py`](file:///home/nithiish/Desktop/aiassistancesystem/security_module.py),
+    four independent fail-closed pieces:
+    - `SecureStore`: Fernet encryption with a PBKDF2 (480k iterations) key derived from
+      a master password, per-store random salt, 0600 file mode. Tests assert the
+      plaintext canary never appears in the on-disk vault.
+    - `PasswordGate`: PBKDF2 hash only — the password itself is never stored —
+      `hmac.compare_digest` comparison, lockout after 5 failures.
+    - `ConfirmationWord`: rotating, **single-use**, expiring word. Rationale: a plain
+      "y" can be satisfied by an agent loop, a replay, or a stray keystroke; a word
+      that changes every use and is consumed on *both* success and failure cannot be
+      pre-computed or replayed.
+    - `VoicePrintVerifier`: interface + enrollment flow + fail-closed contract are
+      implemented and tested. **The audio backend is NOT installed** (`resemblyzer`,
+      `sounddevice` absent), so `available()` is False and verification returns
+      `"unavailable"` — it never degrades into an accidental allow. Wiring a real
+      backend means implementing `_embed()`; the surrounding guarantees already hold.
+    - `tests/test_security_module.py`: 45 tests (security invariants, not feature tests).
+13. **Wake-word general Q&A mode (COMPLETED — except the audio backend)** —
+    [`wake_word.py`](file:///home/nithiish/Desktop/aiassistancesystem/wake_word.py).
+    - Wake word with STT-variant tolerance (`zedeck`, `zedak`, `sedek`…), matched only
+      at utterance start so ordinary mentions don't activate it. 30-second activation
+      window that refreshes on each handled utterance; sleep phrases close it.
+    - **Critical boundary — Q&A only**: the default handler routes to
+      `orchestrator.answer_general_question()`, bypassing `execute()` entirely. There
+      is no code path from a spoken utterance to a system action, because speech is a
+      low-confidence channel (STT mishears; anyone in earshot can speak). Tests assert
+      `execute()` is never called even for action-phrased utterances.
+    - Kept separate from the security voice channel by design: hearing the wake word
+      proves *someone* spoke, not *who* — it is never an authorization signal.
+    - No capture backend installed, so `listen_forever()` refuses loudly rather than
+      looking like a listener that simply never hears anything. The utterance-processing
+      core is backend-independent and fully tested via `process_utterance()`.
+    - `tests/test_wake_word.py`: 26 tests.
+14. **Academic / placement-prep tracking (COMPLETED)** — the "personal tutor" use case,
+    [`academic_tracker.py`](file:///home/nithiish/Desktop/aiassistancesystem/academic_tracker.py).
+    - Its own structured JSON store (`data/academic_progress.json`), deliberately NOT
+      ChromaDB: practice history is numeric and queried by aggregation, and semantic
+      similarity is the wrong retrieval model for "accuracy per topic".
+    - Weakness score = 0.55·inaccuracy + 0.30·staleness + 0.15·low-volume, where
+      accuracy is **Laplace-smoothed** so one bad day doesn't permanently pin a topic
+      to the top, staleness surfaces topics that were strong but have gone cold, and
+      low volume nudges barely-tried topics up. Every recommendation reports which
+      factor dominated, so it explains itself instead of just ranking.
+    - Cold start returns "no data, that would just be a guess" rather than inventing
+      weak topics. A corrupt progress file degrades to empty instead of crashing.
+    - Practice streaks count yesterday as still-alive (the day isn't over).
+    - Intent `academic_tracking` registered; `orchestrator._handle_academic_tracking()`
+      extracts log-vs-review intent and **defaults to review on any extraction failure**
+      — reading progress is harmless, guessing at a log entry would corrupt the history.
+    - `tests/test_academic_tracker.py`: 37 tests.
+
+### Codebase health pass (done alongside Items 9–14)
+
+- **Real bug fixed**: `evaluator_agent.py` referenced `os.path.isdir()` without ever
+  importing `os` — a guaranteed `NameError` on every project-root verification run.
+  Pillar 2's project-level test-suite path had been dead on arrival.
+- **Real bug fixed**: the user-approved coding plan was being thrown away —
+  `implement_and_verify()` called `plan_task()` again internally, so the user approved
+  plan A while the agent generated code against a freshly regenerated plan B. It now
+  accepts the approved plan and reuses it.
+- **Signature mismatch caught pre-merge**: `research_agent` initially called
+  `scholar_search_papers` with `limit` instead of its actual `max_results` parameter.
+- Dead imports/variables removed across 8 modules; pyflakes is clean apart from three
+  harmless redundant `global` declarations (mutation-only, left alone deliberately).
+- The cross-file `INTENT_UTTERANCES` ⇄ `ROUTER_TOOLS` consistency test caught each new
+  intent that was registered in one file but not the other — it did its job three times.
 
 ### Architecture guidance to keep in the system design
 

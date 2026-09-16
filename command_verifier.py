@@ -7,7 +7,6 @@ destructive commands to the normal confirmation gate without executing them.
 """
 
 import re
-import shlex
 import subprocess
 
 from zedek_logger import get_logger

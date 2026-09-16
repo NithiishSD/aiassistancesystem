@@ -23,7 +23,7 @@ import asyncio
 import json
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from zedek_logger import get_logger
@@ -241,7 +241,6 @@ async def _async_discover_server(cfg: MCPServerConfig) -> list[MCPToolSpec]:
     """
     from mcp.client.stdio import stdio_client, StdioServerParameters
     from mcp import ClientSession
-    import mcp.types as mt
 
     params = StdioServerParameters(
         command=cfg.command,

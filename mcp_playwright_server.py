@@ -33,7 +33,6 @@ import asyncio
 import base64
 import ipaddress
 import socket
-import tempfile
 from urllib.parse import urlparse
 
 from mcp.server.mcpserver import MCPServer

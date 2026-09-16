@@ -25,11 +25,41 @@ import classifier
 import llm_provider
 from coding_agent import CodingSpecialist
 import mcp_client
+import task_planner
+import research_agent
+from research_agent import ResearchAgent
+import web_agent
+from web_agent import WebAgent
+import coding_agent
+import academic_tracker
+from academic_tracker import AcademicTracker
+from watchdog import Watchdog
 
 log = get_logger("orchestrator")
 
 ROUTING_MODEL = "llama3.1:8b"
 CODING_SPECIALIST = CodingSpecialist()
+RESEARCH_AGENT = ResearchAgent()
+WEB_AGENT = WebAgent()
+WATCHDOG = Watchdog()
+ACADEMIC_TRACKER = AcademicTracker()
+
+
+def _declared_write_targets(plan: dict) -> set[str]:
+    """The set of file writes a coding plan actually declared.
+
+    A plan that names no files still implicitly authorizes the specialist's
+    default target, so that one is included — otherwise every default-target
+    patch would read as a deviation.
+    """
+    declared = {
+        f"write:{path}"
+        for path in list(plan.get("files_to_create", [])) + list(plan.get("files_to_modify", []))
+        if path
+    }
+    default_target = os.path.join(coding_agent.CODING_WRITE_ROOT, "solution.py")
+    declared.add(f"write:{default_target}")
+    return declared
 LAST_ROUTING_DECISION: dict | None = None
 
 
@@ -797,6 +827,132 @@ def format_coding_plan(plan: dict) -> str:
     )
 
 
+def _handle_research(decision: dict, domain: str) -> str:
+    """Dispatch a research question to the grounded ResearchAgent (Roadmap Item 10).
+
+    The agent gates each of its own read-only tool calls internally, so no
+    additional gate() call is needed here.
+    """
+    question = decision.get("_original_input", "")
+    report = RESEARCH_AGENT.research(question, domain=domain)
+
+    log.info("research_task_completed", extra={
+        "grounded": report.grounded, "source_count": len(report.sources),
+    })
+
+    # Only reinforce the router when the research actually produced grounded
+    # evidence — a failed, ungrounded run is not a signal that routing was right.
+    if decision.get("via_llm") and report.grounded:
+        classifier.add_utterance_dynamically(question, "research_task")
+
+    return research_agent.format_research_report(report)
+
+
+def _extract_academic_intent(user_input: str) -> dict:
+    """Work out whether the user is logging practice or reviewing progress.
+
+    Falls back to "review" on any failure — reading progress is harmless,
+    whereas guessing at a log entry would write junk into the practice history.
+    """
+    prompt = f"""The user is talking about their DSA / aptitude / placement practice.
+
+Message: {user_input}
+
+Decide what they want:
+- "log"     — they are recording a practice attempt they just did
+- "review"  — they are asking what is weak or what to practice next
+- "summary" — they are asking about overall progress, accuracy, or streak
+
+If (and only if) the action is "log", also extract:
+- topic: the subject area (e.g. "dynamic programming", "graphs", "quantitative aptitude")
+- result: exactly one of "solved", "failed", "partial"
+- problem: the problem name, if mentioned (else "")
+- difficulty: easy/medium/hard, if mentioned (else "")
+- minutes: minutes spent as a number, if mentioned (else 0)
+
+Return ONLY valid JSON:
+{{"action": "log", "topic": "graphs", "result": "solved", "problem": "", "difficulty": "", "minutes": 0}}"""
+
+    try:
+        result = llm_provider.generate_chat(
+            [{"role": "user", "content": prompt}], json_mode=True, task="fact_handling",
+        )
+        parsed = json.loads(result["answer"])
+        if isinstance(parsed, dict) and parsed.get("action") in ("log", "review", "summary"):
+            return parsed
+    except Exception as e:
+        log.info("academic_intent_extraction_failed", extra={"error": str(e)})
+
+    return {"action": "review"}
+
+
+def _handle_academic_tracking(decision: dict) -> str:
+    """Log a practice attempt or report on progress (Roadmap Item 14)."""
+    user_input = decision.get("_original_input", "")
+    extracted = _extract_academic_intent(user_input)
+    action = extracted.get("action", "review")
+
+    if action == "log":
+        attempt = ACADEMIC_TRACKER.log_attempt(
+            topic=extracted.get("topic", ""),
+            result=extracted.get("result", ""),
+            problem=extracted.get("problem", ""),
+            difficulty=extracted.get("difficulty", ""),
+            minutes=extracted.get("minutes", 0) or 0,
+        )
+        if attempt is None:
+            log.info("academic_log_failed_extraction", extra={"user_input": user_input})
+            return ("I couldn't tell which topic and outcome to record. Try something like "
+                    "\"log that I solved a graphs problem in 20 minutes\".")
+
+        if decision.get("via_llm"):
+            classifier.add_utterance_dynamically(user_input, "academic_tracking")
+
+        log.info("academic_attempt_recorded", extra={"topic": attempt.topic, "result": attempt.result})
+        stats = ACADEMIC_TRACKER.topic_stats(attempt.topic)
+        return (f"Logged: {attempt.result} on {attempt.topic}"
+                f"{f' ({attempt.problem})' if attempt.problem else ''}. "
+                f"That's {stats.solved}/{stats.attempts} solved on {attempt.topic} so far.")
+
+    if action == "summary":
+        if decision.get("via_llm"):
+            classifier.add_utterance_dynamically(user_input, "academic_tracking")
+        return academic_tracker.format_summary(ACADEMIC_TRACKER.summary())
+
+    if decision.get("via_llm"):
+        classifier.add_utterance_dynamically(user_input, "academic_tracking")
+    return academic_tracker.format_recommendations(ACADEMIC_TRACKER.recommend())
+
+
+def _interactive_confirm(message: str) -> bool:
+    """Terminal confirmation prompt used for Tier 2 browser actions."""
+    print(message)
+    return input("> ").strip().lower() == "y"
+
+
+def _handle_web_task(decision: dict) -> str:
+    """Dispatch a browsing goal to the WebAgent (Roadmap Item 10).
+
+    Browser tools are Tier 2, so every action stops for typed confirmation.
+    The agent gates each action itself; confirmation is injected here so the
+    agent can never self-approve.
+    """
+    goal = decision.get("_original_input", "")
+    urls = research_agent.extract_urls(goal)
+    start_url = urls[0] if urls else None
+
+    report = WEB_AGENT.browse(goal, start_url=start_url, confirm_fn=_interactive_confirm)
+
+    log.info("web_task_completed", extra={
+        "completed": report.completed, "steps": len(report.steps),
+    })
+
+    if decision.get("via_llm") and report.completed:
+        classifier.add_utterance_dynamically(goal, "web_task")
+
+    return web_agent.format_browse_report(report)
+
+
 def _execute_mcp_tool(decision: dict) -> str:
     """Dispatch to MCP layer. Tier gate is called internally — callers need not."""
     args_dict = decision.get("args", {})
@@ -886,7 +1042,7 @@ def execute(decision: dict) -> str:
         print("📋 CODING PLAN")
         print("=" * 60)
         print(f"Goal: {plan.get('goal', 'N/A')}")
-        print(f"\nSteps:")
+        print("\nSteps:")
         for i, step in enumerate(plan.get('steps', []), 1):
             print(f"  {i}. {step}")
         if plan.get('files_to_create'):
@@ -907,8 +1063,18 @@ def execute(decision: dict) -> str:
         if decision.get("via_llm"):
             classifier.add_utterance_dynamically(original_input, "coding_task")
 
+        # Register the approved plan with the watchdog so any write to a file
+        # the user never approved is caught before it reaches the apply prompt.
+        plan_id = WATCHDOG.register_plan(
+            goal=plan.get("goal", original_input),
+            allowed_actions=_declared_write_targets(plan),
+            steps=plan.get("steps", []),
+        )
+
         # ── Execute: patch → test → verify ───────────────────────────────
-        result = CODING_SPECIALIST.implement_and_verify(original_input)
+        # The approved plan is passed back in so code is generated against the
+        # plan the user actually saw, not a regenerated one.
+        result = CODING_SPECIALIST.implement_and_verify(original_input, plan=plan)
         log.info("coding_task_verified", extra={
             "status": result["status"],
             "attempts": result["attempts"],
@@ -917,6 +1083,21 @@ def execute(decision: dict) -> str:
         # Show result summary
         summary = format_coding_result(result)
         print(summary)
+
+        # ── Watchdog: does the patch target a file the plan declared? ────
+        target_file = (result.get("patch") or {}).get("target_file", "")
+        if target_file:
+            verdict = WATCHDOG.observe(
+                plan_id, f"write:{target_file}", {"target_file": target_file}, tier=2,
+            )
+            if not verdict.allowed:
+                log.info("coding_patch_blocked_by_watchdog", extra={
+                    "target_file": target_file, "reason": verdict.reason,
+                })
+                return (
+                    f"{summary}\n\n⛔ Watchdog blocked this patch: {verdict.reason}\n"
+                    "Nothing was written. Re-run the request if you want this file included in the plan."
+                )
 
         # ── Checkpoint 3: File application approval ──────────────────────
         if result["status"] in ("passed", "unverified") and result.get("patch"):
@@ -981,6 +1162,15 @@ def execute(decision: dict) -> str:
 
     if func_name == "system_inspect":
         return _handle_system_inspect(decision.get("_original_input", ""), domain)
+
+    if func_name == "research_task":
+        return _handle_research(decision, domain)
+
+    if func_name == "web_task":
+        return _handle_web_task(decision)
+
+    if func_name == "academic_tracking":
+        return _handle_academic_tracking(decision)
 
     if func_name == "unsupported":
         reason = decision.get("reason", "this request")
@@ -1166,23 +1356,13 @@ def format_result(func_name: str, result) -> str:
     return str(result)
 
 
-def handle(user_input: str) -> str:
-    """Full pipeline: route -> validate -> execute -> answer -> store turn."""
-    recent_user_turns = [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]
+def _handle_single(user_input: str) -> str:
+    """Route -> validate -> execute -> store turn, for one atomic request.
 
-    if should_ask_ambiguous_term_question(user_input, recent_user_turns):
-        answer = generate_ambiguity_reply(user_input, recent_user_turns[-1] if recent_user_turns else None)
-        _add_to_session("user", user_input)
-        _add_to_session("assistant", answer)
-        return answer
-
-    previous_user_turn = recent_user_turns[-1] if recent_user_turns else ""
-    if should_treat_as_disambiguation(previous_user_turn, user_input):
-        answer = generate_ambiguity_reply(user_input, previous_user_turn)
-        _add_to_session("user", user_input)
-        _add_to_session("assistant", answer)
-        return answer
-
+    This is the pre-existing single-task pipeline, extracted so the task
+    planner (Roadmap Item 9) can run it once per decomposed sub-request
+    without duplicating the routing/session-logging logic.
+    """
     global LAST_ROUTING_DECISION
     decision = route_request(user_input)
     decision["_original_input"] = user_input
@@ -1199,6 +1379,65 @@ def handle(user_input: str) -> str:
     _add_to_session("assistant", answer)
 
     return answer
+
+
+def _substitute_result_placeholders(description: str, prior_results: list[str]) -> str:
+    """Replace {{result_of_N}} (1-based) with a previously computed sub-task's answer."""
+    def _sub(match: re.Match) -> str:
+        idx = int(match.group(1)) - 1
+        if 0 <= idx < len(prior_results):
+            return prior_results[idx]
+        return match.group(0)
+    return re.sub(r"\{\{result_of_(\d+)\}\}", _sub, description)
+
+
+def _handle_decomposed(user_input: str) -> str:
+    """Break a bundled multi-part request into atomic sub-requests (Roadmap
+    Item 9: task planner/decomposer) and run each through the normal
+    single-task pipeline in order, substituting earlier results into later
+    sub-requests when referenced.
+    """
+    subtasks = task_planner.decompose(user_input)
+    if len(subtasks) <= 1:
+        return _handle_single(user_input)
+
+    log.info("task_plan_execution_started", extra={
+        "original_input": user_input, "subtask_count": len(subtasks),
+    })
+
+    results: list[str] = []
+    lines: list[str] = []
+    for i, subtask in enumerate(subtasks, start=1):
+        description = _substitute_result_placeholders(subtask["description"], results)
+        answer = _handle_single(description)
+        results.append(answer)
+        lines.append(f"{i}. {description}\n   → {answer}")
+
+    log.info("task_plan_execution_finished", extra={"subtask_count": len(subtasks)})
+    return "I broke this into steps:\n\n" + "\n".join(lines)
+
+
+def handle(user_input: str) -> str:
+    """Full pipeline: (optional) decompose -> route -> validate -> execute -> answer -> store turn."""
+    recent_user_turns = [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]
+
+    if should_ask_ambiguous_term_question(user_input, recent_user_turns):
+        answer = generate_ambiguity_reply(user_input, recent_user_turns[-1] if recent_user_turns else None)
+        _add_to_session("user", user_input)
+        _add_to_session("assistant", answer)
+        return answer
+
+    previous_user_turn = recent_user_turns[-1] if recent_user_turns else ""
+    if should_treat_as_disambiguation(previous_user_turn, user_input):
+        answer = generate_ambiguity_reply(user_input, previous_user_turn)
+        _add_to_session("user", user_input)
+        _add_to_session("assistant", answer)
+        return answer
+
+    if task_planner.should_decompose(user_input):
+        return _handle_decomposed(user_input)
+
+    return _handle_single(user_input)
 
 
 if __name__ == "__main__":

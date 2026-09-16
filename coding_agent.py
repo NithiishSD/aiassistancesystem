@@ -18,10 +18,7 @@ import os
 import re
 import resource
 import shutil
-import subprocess
-import tempfile
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import llm_provider
@@ -232,7 +229,7 @@ def _create_backup(file_path: str) -> str | None:
 # Verifier
 # ═══════════════════════════════════════════════════════════════════════════
 
-from evaluator_agent import EvaluatorAgent, EvaluationReport
+from evaluator_agent import EvaluatorAgent
 
 
 class Verifier:
@@ -282,7 +279,7 @@ class Verifier:
 # Sandboxed Python Runner (Backed by SandboxRunner)
 # ═══════════════════════════════════════════════════════════════════════════
 
-from sandbox_runner import SandboxRunner, SandboxMode, ExecutionResult
+from sandbox_runner import SandboxRunner, SandboxMode
 
 
 class SandboxedPythonRunner:
@@ -576,15 +573,21 @@ RULES:
         max_retries: int = 1,
         project_aware: bool = False,
         allow_network: bool = False,
+        plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute the full plan → patch → test → verify loop.
 
         Returns a structured result with plan, code, tests, verification,
         and LLM review. Does NOT apply changes to files — that requires
         separate explicit approval via apply_patch().
+
+        `plan` accepts an already-approved plan. Callers that showed a plan to
+        the user MUST pass it back, so the code is generated against the plan
+        the user actually approved rather than a freshly regenerated one.
         """
-        # Step 1: Plan
-        plan = self.plan_task(request)
+        # Step 1: Plan (reuse the approved plan when one was supplied)
+        if plan is None:
+            plan = self.plan_task(request)
 
         # Step 2: Read existing code from target file if available
         if not current_code and plan.get("files_to_modify"):
