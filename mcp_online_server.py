@@ -25,7 +25,7 @@ import ipaddress
 import re
 import socket
 import xml.etree.ElementTree as ET
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote, quote_plus, urlparse
 
 import httpx
 
@@ -234,8 +234,12 @@ def search_wikipedia(query: str, limit: int = 3) -> str:
     results: list[str] = []
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         for title, page_url in zip(titles, urls):
+            # The REST summary endpoint takes the title as a PATH segment, so
+            # spaces must become underscores. quote_plus would emit "+" here and
+            # every lookup would 404.
             summary_url = (
-                f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote_plus(title)}"
+                "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                f"{quote(title.replace(' ', '_'), safe='')}"
             )
             try:
                 s_resp = client.get(summary_url, headers=headers)

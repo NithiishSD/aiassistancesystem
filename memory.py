@@ -135,8 +135,14 @@ def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_I
     docs = results.get("documents", [[]])[0]
     metas = results.get("metadatas", [[]])[0]
     ids = results.get("ids", [[]])[0]
-    for doc, meta, item_id in zip(docs, metas, ids):
-        items.append({"text": doc, "metadata": meta, "id": item_id})
+    # Chroma returns a distance per hit; surfacing it lets callers judge whether
+    # a match is actually relevant. Semantic search always returns its top_k,
+    # however poor the match, so without this every caller treats junk as a hit.
+    # Lower is closer. Missing distances default to 0.0 (treated as relevant).
+    distances = (results.get("distances") or [[]])[0]
+    for index, (doc, meta, item_id) in enumerate(zip(docs, metas, ids)):
+        distance = distances[index] if index < len(distances) else 0.0
+        items.append({"text": doc, "metadata": meta, "id": item_id, "distance": distance})
 
     log.info("memory_retrieved", extra={"domain": domain, "user_id": user_id,
                                           "query": query, "results_found": len(items)})

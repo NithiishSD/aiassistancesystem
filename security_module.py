@@ -368,10 +368,12 @@ class VoicePrintVerifier:
     """
 
     SIMILARITY_THRESHOLD = 0.75
+    SAMPLE_RATE = 16_000
 
     def __init__(self, store: SecureStore | None = None) -> None:
         self.store = store
         self._backend_error = ""
+        self._encoder: Any = None
 
     def available(self) -> bool:
         """Whether a speaker-embedding backend is importable."""
@@ -382,12 +384,50 @@ class VoicePrintVerifier:
             self._backend_error = str(err)
             return False
 
+    def _get_encoder(self) -> Any:
+        """Load the speaker encoder once and reuse it — it's a torch model."""
+        if self._encoder is None:
+            from resemblyzer import VoiceEncoder
+            self._encoder = VoiceEncoder(verbose=False)
+        return self._encoder
+
     def _embed(self, audio_samples: Any) -> list[float]:
-        """Produce a speaker embedding. Requires the audio backend."""
-        raise NotImplementedError(
-            "No speaker-embedding backend installed. "
-            "Install `resemblyzer` and a capture library to enable voice verification."
+        """Produce a speaker embedding from samples, a numpy array, or a wav path.
+
+        Accepts whatever the caller has: a path to a wav file, a numpy array of
+        float samples, or a plain list of floats at SAMPLE_RATE.
+        """
+        import numpy as np
+        from resemblyzer import preprocess_wav
+
+        if isinstance(audio_samples, (str, os.PathLike)):
+            wav = preprocess_wav(audio_samples)
+        else:
+            raw = np.asarray(audio_samples, dtype=np.float32).flatten()
+            if raw.size == 0:
+                raise ValueError("No audio samples supplied.")
+            wav = preprocess_wav(raw, source_sr=self.SAMPLE_RATE)
+
+        return self._get_encoder().embed_utterance(wav).tolist()
+
+    def record(self, seconds: float = 4.0) -> Any:
+        """Capture a short sample from the default microphone.
+
+        Kept separate from verify()/enroll() so the verification logic stays
+        testable without hardware, and so a caller can supply audio from
+        somewhere else entirely.
+        """
+        import sounddevice as sd
+
+        frames = sd.rec(
+            int(seconds * self.SAMPLE_RATE),
+            samplerate=self.SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
         )
+        sd.wait()
+        log.info("voice_sample_recorded", extra={"seconds": seconds})
+        return frames.flatten()
 
     def enroll(self, audio_samples: Any) -> VoiceVerificationResult:
         """Record the reference voice print into the encrypted store."""

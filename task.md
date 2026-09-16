@@ -42,16 +42,20 @@ rigor as Item 8: plan → implement → test → run full suite → document in
 - [x] `PasswordGate`: salted hash only, constant-time compare, lockout after 5 failures
 - [x] `ConfirmationWord`: rotating, single-use, expiring — cannot be replayed
 - [x] `VoicePrintVerifier`: interface + fail-closed contract implemented and tested
-- [ ] Voice-print AUDIO BACKEND — blocked: `resemblyzer`/`sounddevice` not installed.
-      Reports `unavailable` and refuses; never silently passes.
+- [x] Voice-print AUDIO BACKEND — WIRED. `resemblyzer` + `sounddevice` installed;
+      `_embed()` implemented (256-dim), `record()` captures from the mic.
+      Verified: identical audio -> 1.0 similarity -> verified; different -> 0.65 -> rejected;
+      print encrypted at rest. NOT yet calibrated against real speech.
 - [x] Test suite `tests/test_security_module.py` (45 tests)
 
 ## Item 13 — Wake-word general Q&A mode ✅ COMPLETE (audio backend pending)
 - [x] `wake_word.py`: wake-word detection with STT-variant tolerance, activation window, sleep phrases
 - [x] Q&A-ONLY boundary: no code path from a spoken utterance to `execute()`
 - [x] Kept separate from the security voice channel — never an authorization signal
-- [ ] Microphone CAPTURE BACKEND — blocked: no capture library installed.
-      `listen_forever()` refuses loudly instead of silently never hearing anything.
+- [x] Microphone CAPTURE BACKEND — WIRED. `sounddevice` capture + offline Vosk STT
+      (`models/vosk-model-small-en-us-0.15`, 68MB). Local transcription on purpose:
+      an always-on mic streaming to a cloud API is a different privacy proposition.
+      Verified: model loads, mic detected. NOT yet run against live speech.
 - [x] Test suite `tests/test_wake_word.py` (26 tests)
 
 ## Item 14 — Academic / placement-prep tracking ✅ COMPLETE
@@ -63,8 +67,27 @@ rigor as Item 8: plan → implement → test → run full suite → document in
 - [x] Intent `academic_tracking` registered; orchestrator defaults to review on extraction failure
 - [x] Test suite `tests/test_academic_tracker.py` (37 tests)
 
+## Live verification pass (mocks are not evidence)
+- [x] Research agent run against real network + MCP servers
+- [x] Web agent run against real Chromium (example.com), deny-path confirmed to block
+- [x] Voice-print enroll -> verify round trip through the encrypted store
+- [x] Vosk model + mic detected and loading
+- [ ] Wake-word loop against LIVE SPEECH — needs you to run it and talk
+
+### Bugs the live run found that mocks never could
+- [x] `mcp_online_server.search_wikipedia` built the REST summary URL with
+      `quote_plus`, producing `Binary+search+tree`. That endpoint takes a PATH
+      segment, so EVERY Wikipedia summary 404'd and returned "(Summary unavailable)".
+- [x] "No X found for ..." responses were being counted as research sources —
+      inflating the source count and marking ungrounded reports as grounded.
+- [x] `memory.retrieve()` discarded Chroma's distances, so no caller could tell a
+      0.49 match from a 1.97 one. Every research question dragged in unrelated
+      personal facts. Distances are now returned and filtered at 1.0.
+- [x] Wikipedia OpenSearch matches TITLES, so the planner's descriptive queries
+      ("binary search tree data structure") silently found nothing. Now retries shortened.
+
 ## Final state
-- Full suite: **429 passed, 0 failures** (was 221 at the start of this work)
+- Full suite: **445 passed, 0 failures** (was 221 at the start of this work)
 - 7 new modules, 7 new test suites, 3 new intents, 2 new LLM task profiles
 
 ## Codebase health pass (alongside the above)

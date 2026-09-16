@@ -50,6 +50,20 @@ MAX_SOURCES = 6
 MAX_SOURCE_CHARS = 4000
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
+# Semantic search always returns its top_k, however weak the match, so a
+# general-knowledge question would otherwise drag in unrelated personal facts.
+# Measured against this project's store: genuine matches land around 0.5-0.7,
+# unrelated ones around 1.4-2.0. 1.0 sits in the gap with margin either side.
+MEMORY_RELEVANCE_MAX_DISTANCE = 1.0
+
+# The research tools report "nothing found" in-band as ordinary text. That is a
+# negative result, not evidence — counting it as a source would inflate the
+# source count, mark a report "grounded", and pad the synthesis prompt with
+# sentences saying nothing was found.
+_EMPTY_RESULT_RE = re.compile(
+    r"^(no|could not)\b[^.\n]{0,80}\b(found|results?|resolve)\b", re.IGNORECASE,
+)
+
 # Question shapes that call for academic sources rather than encyclopedic ones.
 _ACADEMIC_MARKERS = [
     "paper", "papers", "research", "study", "studies", "publication",
@@ -199,7 +213,36 @@ Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
                 "tool": qualified_name, "marker": text[:80],
             })
             return None
+        if _EMPTY_RESULT_RE.match(text.strip()):
+            log.info("research_tool_returned_no_results", extra={"tool": qualified_name})
+            return None
         return text
+
+    def _wikipedia_lookup(self, query: str, question: str) -> tuple[str | None, str]:
+        """Look up Wikipedia, shortening the query if the full one finds nothing.
+
+        Wikipedia's OpenSearch matches article TITLES, so a descriptive query
+        like "binary search tree data structure" returns nothing while the
+        article "Binary search tree" exists. The planner naturally writes the
+        descriptive form, so retry once with the leading words only.
+
+        Returns (content_or_None, the query that actually worked).
+        """
+        found = self._call_tool(WIKIPEDIA_TOOL, {"query": query, "limit": 2}, question)
+        if found:
+            return found, query
+
+        words = query.split()
+        if len(words) > 3:
+            shortened = " ".join(words[:3])
+            log.info("research_wikipedia_retry_shortened", extra={
+                "original": query, "shortened": shortened,
+            })
+            found = self._call_tool(WIKIPEDIA_TOOL, {"query": shortened, "limit": 2}, question)
+            if found:
+                return found, shortened
+
+        return None, query
 
     def gather(self, question: str, queries: list[str], domain: str = "academic") -> list[Source]:
         """Collect evidence from memory and the live read-only research tools."""
@@ -215,10 +258,12 @@ Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
             ))
             counter += 1
 
-        # 1. What the user already told us (RAG over ChromaDB).
+        # 1. What the user already told us (RAG over ChromaDB), relevance-filtered.
         try:
             remembered = memory.retrieve(question, domain=domain, content_type="fact", top_k=3)
             for item in remembered:
+                if item.get("distance", 0.0) > MEMORY_RELEVANCE_MAX_DISTANCE:
+                    continue
                 add("memory", item["text"])
         except Exception as err:
             log.info("research_memory_retrieval_failed", extra={"error": str(err)})
@@ -241,9 +286,9 @@ Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
                 arxiv = self._call_tool(ARXIV_TOOL, {"query": query, "max_results": 3}, question)
                 if arxiv:
                     add("arxiv", arxiv, query=query)
-            wiki = self._call_tool(WIKIPEDIA_TOOL, {"query": query, "limit": 2}, question)
+            wiki, used_query = self._wikipedia_lookup(query, question)
             if wiki:
-                add("wikipedia", wiki, query=query)
+                add("wikipedia", wiki, query=used_query)
 
         log.info("research_sources_gathered", extra={
             "question": question[:200],

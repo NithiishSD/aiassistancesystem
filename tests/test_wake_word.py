@@ -168,9 +168,32 @@ class TestQaOnlyBoundary:
 
 
 class TestAudioBackend:
-    def test_backend_unavailable_in_this_environment(self):
-        assert wake_word.audio_available() is False
+    """Every missing prerequisite must refuse loudly, never silently no-op.
 
-    def test_listen_forever_refuses_without_backend(self, listener):
+    These patch the availability probes rather than reading the real
+    environment, so the fail-closed contract is pinned down whether or not
+    the audio stack happens to be installed on this machine.
+    """
+
+    def test_refuses_without_capture_backend(self, listener, monkeypatch):
+        monkeypatch.setattr(wake_word, "audio_available", lambda: False)
         with pytest.raises(RuntimeError, match="capture backend"):
             listener.listen_forever()
+
+    def test_refuses_without_stt_engine(self, listener, monkeypatch):
+        monkeypatch.setattr(wake_word, "audio_available", lambda: True)
+        monkeypatch.setattr(wake_word, "stt_available", lambda: False)
+        with pytest.raises(RuntimeError, match="[Vv]osk is not installed"):
+            listener.listen_forever()
+
+    def test_refuses_without_stt_model(self, listener, monkeypatch):
+        monkeypatch.setattr(wake_word, "audio_available", lambda: True)
+        monkeypatch.setattr(wake_word, "stt_available", lambda: True)
+        monkeypatch.setattr(wake_word, "stt_model_available", lambda: False)
+        with pytest.raises(RuntimeError, match="No Vosk model found"):
+            listener.listen_forever()
+
+    def test_availability_probes_return_booleans(self):
+        assert isinstance(wake_word.audio_available(), bool)
+        assert isinstance(wake_word.stt_available(), bool)
+        assert isinstance(wake_word.stt_model_available(), bool)

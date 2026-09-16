@@ -26,6 +26,7 @@ from a microphone transcript or typed text.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -36,6 +37,12 @@ from zedek_logger import get_logger
 log = get_logger("wake_word")
 
 DEFAULT_WAKE_WORD = "zedek"
+
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Local speech-to-text model. Kept offline on purpose — see listen_forever().
+VOSK_MODEL_DIR = os.path.join(_PROJECT_ROOT, "models", "vosk-model-small-en-us-0.15")
+SAMPLE_RATE = 16_000
+BLOCK_SIZE = 8_000
 
 # Speech-to-text reliably mangles an unusual proper noun, so accept close
 # variants. These are matched only at the START of an utterance, so ordinary
@@ -77,12 +84,27 @@ def audio_available() -> bool:
     try:
         import sounddevice  # noqa: F401
         return True
-    except ImportError:
+    except (ImportError, OSError):
+        # OSError covers sounddevice importing without libportaudio present.
         try:
             import pyaudio  # noqa: F401
             return True
         except ImportError:
             return False
+
+
+def stt_available() -> bool:
+    """Whether the local speech-to-text engine is importable."""
+    try:
+        import vosk  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def stt_model_available() -> bool:
+    """Whether the Vosk acoustic model has been downloaded."""
+    return os.path.isdir(VOSK_MODEL_DIR)
 
 
 def qa_only_handler(question: str, domain: str = "personal") -> str:
@@ -200,20 +222,63 @@ class WakeWordListener:
 
     # ── Audio loop (requires a capture backend) ──────────────────────────
 
-    def listen_forever(self) -> None:
+    def listen_forever(self, on_result: Callable[[ListenResult], None] | None = None) -> None:
         """Start the always-on microphone loop.
 
-        Refuses to run without a capture backend rather than silently doing
-        nothing, so a missing dependency is visible instead of looking like
-        a listener that just never hears anything.
+        Transcription runs locally via Vosk rather than a cloud API. That is a
+        deliberate choice for an always-on microphone: streaming everything the
+        room says to a third party is a very different privacy proposition from
+        sending it a typed question, and it would also break whenever the
+        network does.
+
+        Refuses to start on any missing prerequisite rather than silently doing
+        nothing, so a missing dependency is visible instead of looking like a
+        listener that simply never hears anything.
         """
         if not audio_available():
             raise RuntimeError(
                 "No microphone capture backend installed. Install `sounddevice` "
-                "(or `pyaudio`) plus a speech-to-text engine to enable always-on "
-                "listening. The utterance-processing logic is ready and tested — "
-                "feed it transcripts via process_utterance()."
+                "(or `pyaudio`). The utterance-processing logic is ready and tested — "
+                "feed it transcripts via process_utterance() in the meantime."
             )
-        raise NotImplementedError(
-            "Audio capture backend is importable but the capture loop is not wired up yet."
-        )
+        if not stt_available():
+            raise RuntimeError(
+                "Vosk is not installed. Run: pip install vosk"
+            )
+        if not stt_model_available():
+            raise RuntimeError(
+                f"No Vosk model found at {VOSK_MODEL_DIR}. Download a small English "
+                "model from https://alphacephei.com/vosk/models (vosk-model-small-en-us-0.15) "
+                f"and unpack it there."
+            )
+
+        import json as _json
+
+        import sounddevice as sd
+        from vosk import KaldiRecognizer, Model
+
+        model = Model(VOSK_MODEL_DIR)
+        recognizer = KaldiRecognizer(model, SAMPLE_RATE)
+
+        log.info("wake_word_listener_started", extra={"wake_word": self.wake_word})
+
+        with sd.RawInputStream(
+            samplerate=SAMPLE_RATE, blocksize=BLOCK_SIZE,
+            dtype="int16", channels=1,
+        ) as stream:
+            while True:
+                data, overflowed = stream.read(BLOCK_SIZE)
+                if overflowed:
+                    log.info("wake_word_audio_overflow", extra={})
+                if not recognizer.AcceptWaveform(bytes(data)):
+                    continue
+
+                transcript = _json.loads(recognizer.Result()).get("text", "").strip()
+                if not transcript:
+                    continue
+
+                result = self.process_utterance(transcript)
+                if on_result is not None:
+                    on_result(result)
+                elif result.status in (HANDLED, ACTIVATED, SLEPT, REFUSED):
+                    print(f"Zedek: {result.response}")

@@ -218,16 +218,15 @@ class TestConfirmationWord:
 
 
 class TestVoicePrintVerifier:
-    def test_backend_reported_unavailable(self):
-        """No speaker-embedding library is installed in this environment."""
-        assert VoicePrintVerifier().available() is False
-
-    def test_verification_without_backend_refuses(self):
+    def test_verification_without_backend_refuses(self, monkeypatch):
+        """With no embedding backend, verification must refuse — never pass."""
+        monkeypatch.setattr(VoicePrintVerifier, "available", lambda self: False)
         result = VoicePrintVerifier().verify(audio_samples=[0.1, 0.2])
         assert result.verified is False
         assert result.status == "unavailable"
 
-    def test_enrollment_without_backend_refuses(self):
+    def test_enrollment_without_backend_refuses(self, monkeypatch):
+        monkeypatch.setattr(VoicePrintVerifier, "available", lambda self: False)
         result = VoicePrintVerifier().enroll(audio_samples=[0.1, 0.2])
         assert result.verified is False
         assert result.status == "unavailable"

@@ -243,3 +243,157 @@ class TestOrchestratorIntegration:
             })
 
         mock_add.assert_not_called()
+
+
+class TestEmptyResultFiltering:
+    """A tool saying "nothing found" is a negative result, not evidence."""
+
+    def setup_method(self):
+        self.agent = ResearchAgent()
+
+    @pytest.mark.parametrize("empty_response", [
+        "No Wikipedia articles found for: 'zzz'.",
+        "No arXiv papers found for: 'zzz'.",
+        "No papers found for: 'zzz'.",
+        "No author found matching: 'zzz'.",
+        "Could not resolve author ID for 'zzz'.",
+        "No citing papers found for paper ID 'x'.",
+    ])
+    def test_empty_results_are_not_treated_as_sources(self, empty_response):
+        with patch("research_agent.mcp_client.get_tool_registry", return_value=_registry(research_agent.WIKIPEDIA_TOOL)), \
+             patch("research_agent.gate", return_value={"action": "allow", "message": ""}), \
+             patch("research_agent.mcp_client.call_mcp_tool", return_value={"result": empty_response, "error": None}):
+            result = self.agent._call_tool(research_agent.WIKIPEDIA_TOOL, {"query": "zzz"}, "q")
+        assert result is None
+
+    def test_real_content_starting_with_no_is_kept(self):
+        """Don't over-match: real prose can legitimately begin with "No"."""
+        content = "No-SQL databases are non-relational stores used for horizontal scaling."
+        with patch("research_agent.mcp_client.get_tool_registry", return_value=_registry(research_agent.WIKIPEDIA_TOOL)), \
+             patch("research_agent.gate", return_value={"action": "allow", "message": ""}), \
+             patch("research_agent.mcp_client.call_mcp_tool", return_value={"result": content, "error": None}):
+            result = self.agent._call_tool(research_agent.WIKIPEDIA_TOOL, {"query": "nosql"}, "q")
+        assert result == content
+
+    def test_empty_results_leave_report_ungrounded(self):
+        mock_plan = {"answer": json.dumps({"queries": ["zzz"]}), "source": "groq"}
+        with patch("research_agent.memory.retrieve", return_value=[]), \
+             patch("research_agent.mcp_client.get_tool_registry", return_value=_registry(*research_agent.RESEARCH_TOOL_ALLOWLIST)), \
+             patch("research_agent.gate", return_value={"action": "allow", "message": ""}), \
+             patch("research_agent.mcp_client.call_mcp_tool", return_value={"result": "No Wikipedia articles found for: 'zzz'.", "error": None}), \
+             patch("research_agent.llm_provider.generate_chat", return_value=mock_plan):
+            report = self.agent.research("some nonsense query")
+        assert report.grounded is False
+        assert report.sources == []
+
+
+class TestMemoryRelevanceFiltering:
+    """Semantic search always returns top_k — irrelevant facts must be dropped."""
+
+    def setup_method(self):
+        self.agent = ResearchAgent()
+
+    def test_irrelevant_memory_facts_excluded(self):
+        remembered = [
+            {"text": "User's project: stop the music played in spotify", "distance": 1.97},
+            {"text": "I'm studying for my data structures exam", "distance": 1.40},
+        ]
+        with patch("research_agent.memory.retrieve", return_value=remembered), \
+             patch.object(ResearchAgent, "_call_tool", return_value=None):
+            sources = self.agent.gather("what is a binary search tree", ["bst"], domain="academic")
+        assert sources == []
+
+    def test_relevant_memory_facts_included(self):
+        remembered = [{"text": "I'm studying for my data structures exam", "distance": 0.49}]
+        with patch("research_agent.memory.retrieve", return_value=remembered), \
+             patch.object(ResearchAgent, "_call_tool", return_value=None):
+            sources = self.agent.gather("my data structures exam", ["exam"], domain="academic")
+        assert len(sources) == 1
+        assert sources[0].origin == "memory"
+
+    def test_missing_distance_is_treated_as_relevant(self):
+        """Backward compatibility with any caller not supplying a distance."""
+        with patch("research_agent.memory.retrieve", return_value=[{"text": "a fact"}]), \
+             patch.object(ResearchAgent, "_call_tool", return_value=None):
+            sources = self.agent.gather("q", ["q"], domain="personal")
+        assert len(sources) == 1
+
+
+class TestWikipediaQueryFallback:
+    """OpenSearch matches article TITLES, so descriptive queries must be shortened."""
+
+    def setup_method(self):
+        self.agent = ResearchAgent()
+
+    def test_full_query_used_when_it_works(self):
+        with patch.object(ResearchAgent, "_call_tool", return_value="content") as mock_call:
+            found, used = self.agent._wikipedia_lookup("binary search tree", "q")
+        assert found == "content"
+        assert used == "binary search tree"
+        assert mock_call.call_count == 1
+
+    def test_long_query_retried_shortened(self):
+        calls = []
+
+        def fake_call(self_, tool, args, question):
+            calls.append(args["query"])
+            return "article content" if args["query"] == "binary search tree" else None
+
+        with patch.object(ResearchAgent, "_call_tool", fake_call):
+            found, used = self.agent._wikipedia_lookup("binary search tree data structure", "q")
+
+        assert found == "article content"
+        assert used == "binary search tree"
+        assert calls == ["binary search tree data structure", "binary search tree"]
+
+    def test_short_query_not_retried(self):
+        with patch.object(ResearchAgent, "_call_tool", return_value=None) as mock_call:
+            found, _ = self.agent._wikipedia_lookup("binary tree", "q")
+        assert found is None
+        assert mock_call.call_count == 1
+
+    def test_both_attempts_failing_returns_none(self):
+        with patch.object(ResearchAgent, "_call_tool", return_value=None) as mock_call:
+            found, _ = self.agent._wikipedia_lookup("some very long nonsense query here", "q")
+        assert found is None
+        assert mock_call.call_count == 2
+
+
+class TestWikipediaQueryFallback:
+    """OpenSearch matches TITLES, so descriptive queries must be shortened."""
+
+    def setup_method(self):
+        self.agent = ResearchAgent()
+
+    def test_full_query_used_when_it_works(self):
+        with patch.object(ResearchAgent, "_call_tool", return_value="content") as mock_call:
+            found, used = self.agent._wikipedia_lookup("binary search tree", "q")
+        assert found == "content"
+        assert used == "binary search tree"
+        assert mock_call.call_count == 1
+
+    def test_long_query_retried_shortened(self):
+        calls = []
+
+        def fake_call(self_, tool, args, question):
+            calls.append(args["query"])
+            return "article content" if args["query"] == "binary search tree" else None
+
+        with patch.object(ResearchAgent, "_call_tool", fake_call):
+            found, used = self.agent._wikipedia_lookup("binary search tree data structure", "q")
+
+        assert found == "article content"
+        assert used == "binary search tree"
+        assert calls == ["binary search tree data structure", "binary search tree"]
+
+    def test_short_query_not_retried(self):
+        with patch.object(ResearchAgent, "_call_tool", return_value=None) as mock_call:
+            found, _ = self.agent._wikipedia_lookup("binary tree", "q")
+        assert found is None
+        assert mock_call.call_count == 1
+
+    def test_both_attempts_failing_returns_none(self):
+        with patch.object(ResearchAgent, "_call_tool", return_value=None) as mock_call:
+            found, _ = self.agent._wikipedia_lookup("some very long nonsense query here", "q")
+        assert found is None
+        assert mock_call.call_count == 2
