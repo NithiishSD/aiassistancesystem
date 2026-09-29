@@ -35,6 +35,7 @@ from scratch.
 | Orchestration | **Hand-rolled** (`orchestrator.py`) | Deliberate. See ROADMAP "Deliberately rejected". |
 | Intent routing | Hybrid: semantic-router (DeBERTa/MiniLM) → LLM tool-calling fallback | This *is* the current recommended pattern: ~65× cheaper and ~50× faster than pure-LLM routing, with the LLM layer covering the out-of-distribution queries embeddings handle badly. |
 | Long-term memory | ChromaDB, split `personal` / `academic`, `user_id` on every row from day one | `user_id` threading was speculative multi-user work that turned out to also be the thing that makes future DPDP compliance a config change rather than a rewrite. |
+| Memory relevance | `reranker.py`: cross-encoder `ms-marco-MiniLM-L-6-v2` (88 MB, local, via the already-installed `sentence-transformers`) behind `memory.retrieve_relevant()`; first-person queries are rewritten to third person before scoring | Replaced the fixed L2 ≤ 1.0 cutoff, which dropped the correct college fact (1.06). Measured median 64 ms for 20 candidates on the laptop CPU. On the labelled fixture: recall 15/15, general-question leaks 0/5, versus 8/15 for the old gate. |
 | Memory hygiene | `memory_hygiene.py` gate on write + cleanup sweep | Added after an audit found ~half of stored "facts" were LLM preamble, bullets, duplicates, or nulls. |
 | Short-term context | In-RAM `SESSION_HISTORY`, distilled to long-term on flush | Avoids writing "how much disk space do I have → 62GB" into permanent storage. |
 | Tool protocol | MCP (7 servers, 27 tools) | Standard protocol, process isolation per server, hot-reloadable into the router. |
@@ -65,9 +66,7 @@ before it's adopted.
 
 | Concern | Planned choice | Why this, not the alternative |
 |---|---|---|
-| Reranking | FlashRank `ms-marco-MiniLM-L-12-v2` (~4 MB) or `bge-reranker-base`, CPU | Measured +31 ms on CPU (independent). Larger rerankers (bge-v2-m3, mxbai-v2) only have GPU latency published, so we start small. |
 | Keyword search | `bm25s` in-memory index + reciprocal rank fusion beside ChromaDB | **Local ChromaDB has no sparse/BM25 search**. That's Cloud-only (verified, chroma #6185). bm25s is 100–500× faster than rank_bm25. |
-| Relevance gate | Reranker score threshold | Replaces the hand-tuned L2 ≤ 1.0 cutoff, which shifts with query length and phrasing. |
 | Structured output | Pydantic models + hand-written per-provider schema adapter + one re-ask | Every provider in the chain has a native schema mode. Instructor would pull in SDK clients, against the no-LiteLLM decision, and Outlines adds nothing over Ollama's `format`. |
 | Caching | Static-first prompt layout (for provider prefix caches) + SQLite exact-match cache for deterministic sub-tasks | Semantic caches hit 5–15% on conversation and serve stale personal answers. |
 | Memory embeddings | `snowflake-arctic-embed-s` or `bge-small-en-v1.5` (both 384-dim) | Same size as MiniLM, better retrieval (self-reported). The eval set decides. |

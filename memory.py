@@ -167,6 +167,88 @@ def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_I
     return items
 
 
+# Relevance gate for retrieve_relevant(): sigmoid of the cross-encoder logit,
+# scored against the third-person query. Tuned on evals/retrieval_fixture.json:
+# 0.025-0.04 all gave 15/15 recall with 0/5 general-question leaks; 0.03 sits
+# inside that band. Re-check with tests/test_retrieval_fixture.py when the fixture grows.
+RELEVANCE_MIN_SCORE = 0.03
+
+# Facts are stored as "User's X: Y" but questions arrive as "where do I live".
+# The cross-encoder doesn't bridge "I/my" to "User's", so correct facts scored
+# near zero until the query was rewritten into the same person as the facts.
+_THIRD_PERSON_RULES = [
+    (" am i ", " is the user "),
+    (" do i ", " does the user "),
+    (" did i ", " did the user "),
+    (" have i ", " has the user "),
+    (" i am ", " the user is "),
+    (" i'm ", " the user is "),
+    (" my ", " the user's "),
+    (" mine ", " the user's "),
+    (" me ", " the user "),
+    (" i ", " the user "),
+]
+
+
+def _third_person_query(query: str) -> str:
+    """Rewrite a first-person question to match how facts are stored."""
+    text = " " + " ".join((query or "").lower().split()) + " "
+    for first_person, third_person in _THIRD_PERSON_RULES:
+        text = text.replace(first_person, third_person)
+    return text.strip()
+# Used only when the reranker is unavailable. Not 1.0: the correct answer to
+# "what college do I study at" measured 1.06 on the live store, while clearly
+# unrelated facts measured from 1.40 up.
+FALLBACK_MAX_DISTANCE = 1.3
+DEFAULT_CANDIDATE_K = 20
+
+
+def retrieve_relevant(query: str, domain: str = "personal", content_type: str = "fact",
+                      top_k: int = 3, candidate_k: int = DEFAULT_CANDIDATE_K,
+                      min_score: float | None = None,
+                      user_id: str = DEFAULT_USER_ID) -> list[dict]:
+    """Facts relevant to `query`, most relevant first, at most `top_k`.
+
+    Pulls a wider dense candidate pool, rescores each candidate against the
+    query with the cross-encoder, and drops anything below the relevance gate.
+    May return an empty list: filling the limit with irrelevant facts is worse
+    than returning nothing. `retrieve()` stays the raw, ungated primitive.
+
+    If the reranker is unavailable, degrades to embedding-distance ranking
+    with FALLBACK_MAX_DISTANCE and logs it. Never raises for that reason.
+    """
+    import reranker
+
+    threshold = RELEVANCE_MIN_SCORE if min_score is None else min_score
+    candidates = retrieve(query, domain=domain, user_id=user_id,
+                          content_type=content_type, top_k=max(candidate_k, top_k))
+    if not candidates:
+        return []
+
+    scores = reranker.score(_third_person_query(query), [item["text"] for item in candidates])
+
+    if scores is None:
+        log.info("memory_retrieval_degraded", extra={
+            "domain": domain, "reason": "reranker_unavailable",
+            "fallback_max_distance": FALLBACK_MAX_DISTANCE,
+        })
+        kept = [item for item in sorted(candidates, key=lambda i: i.get("distance", 0.0))
+                if item.get("distance", 0.0) <= FALLBACK_MAX_DISTANCE]
+        return kept[:top_k]
+
+    ranked = sorted(
+        ({**item, "score": score} for item, score in zip(candidates, scores)),
+        key=lambda item: item["score"], reverse=True,
+    )
+    kept = [item for item in ranked if item["score"] >= threshold][:top_k]
+    log.info("memory_retrieved_relevant", extra={
+        "domain": domain, "candidates": len(candidates), "kept": len(kept),
+        "threshold": threshold,
+        "top_score": round(ranked[0]["score"], 4) if ranked else None,
+    })
+    return kept
+
+
 def delete_by_ids(ids: list[str], domain: str = "personal",
                   user_id: str = DEFAULT_USER_ID) -> None:
     """Deletes IDs only when they belong to the requested user and domain."""

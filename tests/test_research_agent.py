@@ -152,21 +152,21 @@ class TestGatherAndPipeline:
         self.agent = ResearchAgent()
 
     def test_gather_includes_memory_facts(self):
-        with patch("research_agent.memory.retrieve", return_value=[{"text": "User's college: PSG"}]), \
+        with patch("research_agent.memory.retrieve_relevant", return_value=[{"text": "User's college: PSG"}]), \
              patch.object(ResearchAgent, "_call_tool", return_value=None):
             sources = self.agent.gather("where do I study", ["college"], domain="academic")
         assert len(sources) == 1
         assert sources[0].origin == "memory"
 
     def test_gather_survives_memory_failure(self):
-        with patch("research_agent.memory.retrieve", side_effect=RuntimeError("chroma down")), \
+        with patch("research_agent.memory.retrieve_relevant", side_effect=RuntimeError("chroma down")), \
              patch.object(ResearchAgent, "_call_tool", return_value="wiki text"):
             sources = self.agent.gather("what is python", ["python"], domain="personal")
         assert all(s.origin != "memory" for s in sources)
 
     def test_gather_respects_max_sources(self):
         agent = ResearchAgent(max_sources=2)
-        with patch("research_agent.memory.retrieve", return_value=[{"text": f"fact {i}"} for i in range(5)]), \
+        with patch("research_agent.memory.retrieve_relevant", return_value=[{"text": f"fact {i}"} for i in range(5)]), \
              patch.object(ResearchAgent, "_call_tool", return_value="more text"):
             sources = agent.gather("q", ["a", "b"], domain="personal")
         assert len(sources) == 2
@@ -174,7 +174,7 @@ class TestGatherAndPipeline:
     def test_research_returns_structured_report(self):
         mock_plan = {"answer": json.dumps({"queries": ["python language"]}), "source": "groq"}
         mock_synth = {"answer": "Python is a language [S1].", "source": "gemini"}
-        with patch("research_agent.memory.retrieve", return_value=[]), \
+        with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch.object(ResearchAgent, "_call_tool", return_value="Python is a programming language."), \
              patch("research_agent.llm_provider.generate_chat", side_effect=[mock_plan, mock_synth]):
             report = self.agent.research("what is python")
@@ -186,7 +186,7 @@ class TestGatherAndPipeline:
 
     def test_research_with_no_sources_is_marked_ungrounded(self):
         mock_plan = {"answer": json.dumps({"queries": ["x"]}), "source": "groq"}
-        with patch("research_agent.memory.retrieve", return_value=[]), \
+        with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch.object(ResearchAgent, "_call_tool", return_value=None), \
              patch("research_agent.llm_provider.generate_chat", return_value=mock_plan):
             report = self.agent.research("some obscure question")
@@ -277,7 +277,7 @@ class TestEmptyResultFiltering:
 
     def test_empty_results_leave_report_ungrounded(self):
         mock_plan = {"answer": json.dumps({"queries": ["zzz"]}), "source": "groq"}
-        with patch("research_agent.memory.retrieve", return_value=[]), \
+        with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch("research_agent.mcp_client.get_tool_registry", return_value=_registry(*research_agent.RESEARCH_TOOL_ALLOWLIST)), \
              patch("research_agent.gate", return_value={"action": "allow", "message": ""}), \
              patch("research_agent.mcp_client.call_mcp_tool", return_value={"result": "No Wikipedia articles found for: 'zzz'.", "error": None}), \
@@ -287,36 +287,36 @@ class TestEmptyResultFiltering:
         assert report.sources == []
 
 
-class TestMemoryRelevanceFiltering:
-    """Semantic search always returns top_k — irrelevant facts must be dropped."""
+class TestMemoryRelevanceDelegation:
+    """Relevance gating now lives in memory.retrieve_relevant() (see
+    tests/test_memory_retrieval.py); the agent must delegate to it, not re-filter."""
 
     def setup_method(self):
         self.agent = ResearchAgent()
 
-    def test_irrelevant_memory_facts_excluded(self):
-        remembered = [
-            {"text": "User's project: stop the music played in spotify", "distance": 1.97},
-            {"text": "I'm studying for my data structures exam", "distance": 1.40},
-        ]
-        with patch("research_agent.memory.retrieve", return_value=remembered), \
+    def test_uses_relevance_ranked_retrieval_with_question(self):
+        with patch("research_agent.memory.retrieve_relevant", return_value=[]) as mock_rel, \
+             patch("research_agent.memory.retrieve") as mock_raw, \
+             patch.object(ResearchAgent, "_call_tool", return_value=None):
+            self.agent.gather("where do I study", ["college"], domain="academic")
+        mock_rel.assert_called_once()
+        assert mock_rel.call_args.args[0] == "where do I study"
+        assert mock_rel.call_args.kwargs["domain"] == "academic"
+        mock_raw.assert_not_called()
+
+    def test_no_relevant_facts_means_no_memory_sources(self):
+        with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch.object(ResearchAgent, "_call_tool", return_value=None):
             sources = self.agent.gather("what is a binary search tree", ["bst"], domain="academic")
         assert sources == []
 
-    def test_relevant_memory_facts_included(self):
-        remembered = [{"text": "I'm studying for my data structures exam", "distance": 0.49}]
-        with patch("research_agent.memory.retrieve", return_value=remembered), \
+    def test_every_relevance_selected_fact_is_used(self):
+        remembered = [{"text": "User's college: PSG College of Technology", "score": 0.02, "distance": 1.06}]
+        with patch("research_agent.memory.retrieve_relevant", return_value=remembered), \
              patch.object(ResearchAgent, "_call_tool", return_value=None):
-            sources = self.agent.gather("my data structures exam", ["exam"], domain="academic")
+            sources = self.agent.gather("what college do I study at", ["college"], domain="academic")
         assert len(sources) == 1
         assert sources[0].origin == "memory"
-
-    def test_missing_distance_is_treated_as_relevant(self):
-        """Backward compatibility with any caller not supplying a distance."""
-        with patch("research_agent.memory.retrieve", return_value=[{"text": "a fact"}]), \
-             patch.object(ResearchAgent, "_call_tool", return_value=None):
-            sources = self.agent.gather("q", ["q"], domain="personal")
-        assert len(sources) == 1
 
 
 class TestWikipediaQueryFallback:

@@ -52,6 +52,12 @@ echo "Caching local intent and memory embedding model..."
 mkdir -p models/all-MiniLM-L6-v2
 HF_HUB_OFFLINE=0 python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', local_dir='models/all-MiniLM-L6-v2')"
 
+# 7. Cache the memory reranker (cross-encoder). Loaded offline at query time
+# by reranker.py; if absent, memory retrieval degrades to embedding ranking.
+echo "Caching memory reranker model..."
+mkdir -p models/cross-encoder-ms-marco-MiniLM-L-6-v2
+HF_HUB_OFFLINE=0 python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='cross-encoder/ms-marco-MiniLM-L-6-v2', local_dir='models/cross-encoder-ms-marco-MiniLM-L-6-v2', allow_patterns=['config.json','model.safetensors','tokenizer*','special_tokens_map.json','vocab.txt'])"
+
 echo ""
 echo "=== Setup complete ==="
 echo "Activate the environment with: conda activate ./zedek-env"

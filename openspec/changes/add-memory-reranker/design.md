@@ -63,6 +63,14 @@ retrieve_relevant(query, domain="personal", content_type="fact",
 - `gather()` replaces its L2 filter with `retrieve_relevant(question, domain=domain, top_k=3)`.
 - `MEMORY_RELEVANCE_MAX_DISTANCE` and its tests are removed. The relevance tests move to the new function.
 
+### D8. Rewrite first-person queries to third person before scoring (added during apply)
+- Stored facts are written as "User's X: Y", but questions come in as "where do I live". The MS MARCO cross-encoder does not bridge "I/my" to "User's", so correct facts scored as low as 0.00035. Meanwhile "who invented Linux" scored 0.0227 against `User's Operating System: Linux`. **No single threshold met both spec requirements** (fixture results under Measurements).
+- `retrieve_relevant()` scores with a deterministic rewrite: "am I" → "is the user", "do I" → "does the user", "I am"/"I'm" → "the user is", "my" → "the user's", "me"/"I" → "the user". Dense candidate retrieval still uses the original query, because the pool is wide (20) and was not the bottleneck.
+- **Why:** about 10 lines, no LLM call, no dependency, no quota cost. On the fixture it is the only configuration that meets every requirement.
+- **Scope:** memory facts only. `reranker.score()` stays generic, because F4 will rerank web chunks where this rewrite would be wrong.
+- **Threshold:** `RELEVANCE_MIN_SCORE = 0.03`. With the rewrite, results were identical from 0.025 to 0.04 (15/15 recall, 0/5 leaks), and 0.03 sits inside that band.
+- **Alternatives rejected:** a raw query with a 0.0002 threshold (15/15 recall, but 1/5 general questions leak a personal fact); a raw query with 0.025 (0 leaks, but recall falls to 9/15, worse than the old ungated retrieval); an LLM query rewrite (costs a call per lookup for something a string rule solves).
+
 ## Risks / Trade-offs
 
 - [First-call load time: torch model load ~1–2 s] → Load lazily once per process. Measure it and report it separately from the per-query budget.
@@ -75,3 +83,22 @@ retrieve_relevant(query, domain="personal", content_type="fact",
 
 - Purely additive, with no data migration. The Chroma store is unchanged.
 - Rollback: point the two call sites back at `memory.retrieve()`. No stored data depends on this change.
+
+## Measurements (recorded during apply)
+
+- **Model footprint:** 88 MB on disk. The first `snapshot_download` pulled 850 MB (Flax, ONNX, OpenVINO, and duplicate PyTorch weights), so `setup.sh` now restricts it with `allow_patterns` to safetensors plus tokenizer files.
+- **Latency** (`evals/bench_reranker.py`, laptop CPU, 20 candidates × 10 queries × 3 runs, after warm-up): **median 64.1 ms, p95 98.9 ms**, within the 300 ms budget. The FlashRank fallback (D1) is not needed.
+- **First load** (torch import plus model load): about 5.5 s, once per process. This is a startup cost, not a per-query one.
+- **Score scale:** raw logits for "what college do I study at" were −3.89 for the college fact and −11.10 for the semester fact. After the sigmoid, the correct fact scores about 0.02, so the relevance threshold sits low in [0, 1]. That is fine because the sigmoid is monotonic, and the value comes from the fixture (task group 4).
+
+- **Fixture results** (`evals/retrieval_fixture.json`: 15 queries with a relevant fact, 5 general-knowledge queries with none):
+
+| Approach | Recall of labelled facts | Relevant ranked first | General-Q leaks |
+|---|---|---|---|
+| Old research-agent gate (dense top-3, L2 ≤ 1.0) | 8/15 | 8/15 | 0/5 |
+| Old general Q&A (dense top-3, no gate) | 14/15 | 13/15 | 5/5 |
+| Reranker, raw query, threshold 0.0002 | 15/15 | 13/15 | 1/5 |
+| Reranker, raw query, threshold 0.025 | 9/15 | 9/15 | 0/5 |
+| **Reranker + third-person rewrite, threshold 0.025–0.04** | **15/15** | **14/15** | **0/5** |
+
+  Owner chose the rewrite (D8) on 2026-09-29.

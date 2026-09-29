@@ -773,7 +773,7 @@ def answer_general_question(user_input: str, domain: str) -> str:
     """
     log.info("general_qa_started", extra={"user_input": user_input, "domain": domain})
 
-    relevant_facts = memory.retrieve(user_input, domain=domain, content_type="fact", top_k=3)
+    relevant_facts = memory.retrieve_relevant(user_input, domain=domain, content_type="fact", top_k=3)
     long_term_lines = [f"- {item['text']}" for item in relevant_facts]
     long_term_block = "\n".join(long_term_lines) if long_term_lines else "(no relevant long-term facts found)"
 

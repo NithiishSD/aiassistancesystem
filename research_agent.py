@@ -50,12 +50,6 @@ MAX_SOURCES = 6
 MAX_SOURCE_CHARS = 4000
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
-# Semantic search always returns its top_k, however weak the match, so a
-# general-knowledge question would otherwise drag in unrelated personal facts.
-# Measured against this project's store: genuine matches land around 0.5-0.7,
-# unrelated ones around 1.4-2.0. 1.0 sits in the gap with margin either side.
-MEMORY_RELEVANCE_MAX_DISTANCE = 1.0
-
 # The research tools report "nothing found" in-band as ordinary text. That is a
 # negative result, not evidence — counting it as a source would inflate the
 # source count, mark a report "grounded", and pad the synthesis prompt with
@@ -258,12 +252,12 @@ Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
             ))
             counter += 1
 
-        # 1. What the user already told us (RAG over ChromaDB), relevance-filtered.
+        # 1. What the user already told us (RAG over ChromaDB). Relevance is
+        # gated by the cross-encoder in memory.retrieve_relevant(), not by raw
+        # L2 distance, which shifts with query phrasing.
         try:
-            remembered = memory.retrieve(question, domain=domain, content_type="fact", top_k=3)
+            remembered = memory.retrieve_relevant(question, domain=domain, content_type="fact", top_k=3)
             for item in remembered:
-                if item.get("distance", 0.0) > MEMORY_RELEVANCE_MAX_DISTANCE:
-                    continue
                 add("memory", item["text"])
         except Exception as err:
             log.info("research_memory_retrieval_failed", extra={"error": str(err)})
