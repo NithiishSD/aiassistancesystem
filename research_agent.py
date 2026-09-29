@@ -48,7 +48,16 @@ RESEARCH_TOOL_ALLOWLIST = {
 }
 
 MAX_SOURCES = 6
-MAX_SOURCE_CHARS = 4000
+MAX_SOURCE_CHARS = 4000  # only when passage selection is unavailable
+
+# Passage selection (ROADMAP F4): instead of each document's first 4,000
+# characters, the passages most relevant to the question from anywhere in it.
+PASSAGE_MAX_WORDS = 180          # ~240 tokens; the cross-encoder reads up to 512
+MAX_PASSAGES = 8
+PASSAGE_CHAR_BUDGET = 6000       # tool-sourced evidence given to the synthesizer
+RAW_DOC_CHAR_CAP = 20000         # safety bound before chunking; tools cap lower
+_PASSAGE_SEPARATOR = "\n…\n"
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 # The research tools report "nothing found" in-band as ordinary text. That is a
@@ -112,6 +121,101 @@ def _truncate(text: str, limit: int = MAX_SOURCE_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n…[truncated]"
+
+
+def _chunk(text: str, max_words: int = PASSAGE_MAX_WORDS) -> list[str]:
+    """Split text into passages of at most `max_words` words.
+
+    Recursive: paragraphs, then sentences for an oversize paragraph, then word
+    windows for an oversize sentence; small neighbours are packed together.
+    """
+    pieces: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", text or ""):
+        words = paragraph.split()
+        if not words:
+            continue
+        if len(words) <= max_words:
+            pieces.append(" ".join(words))
+            continue
+        for sentence in _SENTENCE_END_RE.split(paragraph):
+            sentence_words = sentence.split()
+            for start in range(0, len(sentence_words), max_words):
+                window = sentence_words[start:start + max_words]
+                if window:
+                    pieces.append(" ".join(window))
+
+    chunks: list[str] = []
+    current: list[str] = []
+    for piece in pieces:
+        piece_words = piece.split()
+        if current and len(current) + len(piece_words) > max_words:
+            chunks.append(" ".join(current))
+            current = []
+        current.extend(piece_words)
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+def select_passages(question: str, sources: list[Source]) -> list[Source]:
+    """Reduce gathered documents to the passages most relevant to `question`.
+
+    Memory facts pass through first and untouched (memory already gated them).
+    Every other document is chunked; all passages are scored together by the
+    cross-encoder; the best are kept within MAX_PASSAGES / PASSAGE_CHAR_BUDGET
+    and regrouped under their document in page order, so one citation label
+    still means one document. Documents contributing nothing are dropped and
+    labels are reassigned contiguously. Without the reranker, falls back to
+    each document's first MAX_SOURCE_CHARS.
+    """
+    import reranker
+
+    remembered = [s for s in sources if s.origin == "memory"]
+    documents = [s for s in sources if s.origin != "memory"]
+
+    passages: list[tuple[int, int, str]] = []  # (document index, position, chunk)
+    for doc_index, doc in enumerate(documents):
+        for position, chunk in enumerate(_chunk(doc.content)):
+            passages.append((doc_index, position, chunk))
+
+    scores = None
+    if passages:
+        titled = [f"{documents[d].origin} — {documents[d].query}: {chunk}" for d, _, chunk in passages]
+        scores = reranker.score(question, titled)
+
+    if passages and scores is None:
+        log.info("research_passage_selection_degraded", extra={"reason": "reranker_unavailable"})
+        kept_docs = [Source(label="", origin=d.origin, content=_truncate(d.content), query=d.query)
+                     for d in documents]
+    else:
+        chosen: dict[int, list[tuple[int, str]]] = {}
+        used_chars = taken = 0
+        ranked = sorted(zip(passages, scores or []), key=lambda pair: pair[1], reverse=True)
+        for (doc_index, position, chunk), _score in ranked:
+            if taken >= MAX_PASSAGES:
+                break
+            cost = len(chunk) + len(_PASSAGE_SEPARATOR)  # conservative: every passage may need a joiner
+            if used_chars + cost > PASSAGE_CHAR_BUDGET:
+                continue
+            chosen.setdefault(doc_index, []).append((position, chunk))
+            used_chars += cost
+            taken += 1
+        kept_docs = []
+        for doc_index, doc in enumerate(documents):
+            picked = sorted(chosen.get(doc_index, []))
+            if picked:
+                kept_docs.append(Source(label="", origin=doc.origin,
+                                        content=_PASSAGE_SEPARATOR.join(chunk for _, chunk in picked),
+                                        query=doc.query))
+        log.info("research_passages_selected", extra={
+            "documents": len(documents), "passages": len(passages), "selected": taken,
+            "documents_dropped": len(documents) - len(kept_docs), "evidence_chars": used_chars,
+        })
+
+    selected = [Source(label="", origin=s.origin, content=s.content, query=s.query) for s in remembered] + kept_docs
+    for number, source in enumerate(selected, start=1):
+        source.label = f"S{number}"
+    return selected
 
 
 def is_academic_question(question: str) -> bool:
@@ -247,8 +351,10 @@ Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
             nonlocal counter
             if len(sources) >= self.max_sources:
                 return
+            # Raw (bounded) text: select_passages() picks what the synthesizer sees.
             sources.append(Source(
-                label=f"S{counter}", origin=origin, content=_truncate(strip_invisible(content)), query=query,
+                label=f"S{counter}", origin=origin,
+                content=strip_invisible(content).strip()[:RAW_DOC_CHAR_CAP], query=query,
             ))
             counter += 1
 
@@ -356,7 +462,7 @@ Rules:
         log.info("research_started", extra={"question": question[:200], "domain": domain})
 
         queries = self.plan_queries(question)
-        sources = self.gather(question, queries, domain=domain)
+        sources = select_passages(question, self.gather(question, queries, domain=domain))
         answer = self.synthesize(question, sources)
 
         notes: list[str] = []

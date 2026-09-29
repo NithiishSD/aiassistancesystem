@@ -373,10 +373,11 @@ Ollama `format: "json"`): valid syntax, no schema.
 - Evidence (independent, large corpus): up to +8.1pp Recall@5 over either method alone.
   bm25s is 100–500× faster than rank_bm25. Touches `memory.store()` / `retrieve()`. 0.5–1 day.
 
-### F4. Chunk research pages instead of truncating them
+### F4. Chunk research pages instead of truncating them ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `chunk-research-sources` (main spec `openspec/specs/research-sources/`). ~180-word passages, "origin — query" prefix for scoring, all passages ranked by the cross-encoder, best 8 within 6,000 chars regrouped per document (citations unchanged). 665 ms over six 8k-char pages. The live check also found the Wikipedia tool returned nothing for keyword queries (OpenSearch is title-prefix only) — fixed with a full-text fallback.*
 `research_agent.gather()` keeps each source's first 4,000 characters, so anything past
 that is lost.
-- [ ] Recursive ~250-token chunks (MiniLM truncates at 256 word-pieces), each prefixed
+- [x] Recursive ~250-token chunks (MiniLM truncates at 256 word-pieces), each prefixed
       with "title — section". Rerank all chunks against the question and send only the
       best to `synthesize()`.
 - Evidence: plain chunking matches semantic chunking (NAACL 2025), and the free title

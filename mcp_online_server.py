@@ -229,6 +229,11 @@ def search_wikipedia(query: str, limit: int = 3) -> str:
         return "[error] Unexpected response format from Wikipedia API."
 
     if not titles:
+        # OpenSearch matches article *titles* by prefix, so keyword-style
+        # queries ("transformer attention") find nothing although articles
+        # exist. Fall back to full-text search before reporting no results.
+        titles, urls = _wikipedia_fulltext_titles(query, limit, headers)
+    if not titles:
         return f"No Wikipedia articles found for: '{query}'."
 
     results: list[str] = []
@@ -254,6 +259,26 @@ def search_wikipedia(query: str, limit: int = 3) -> str:
                 results.append(f"**{title}**\n(Summary request failed)\nURL: {page_url}")
 
     return "\n\n---\n\n".join(results)
+
+
+def _wikipedia_fulltext_titles(query: str, limit: int, headers: dict) -> tuple[list[str], list[str]]:
+    """Titles and URLs from Wikipedia full-text search; ([], []) on any failure."""
+    url = (
+        "https://en.wikipedia.org/w/api.php"
+        f"?action=query&list=search&srsearch={quote_plus(query)}"
+        f"&srlimit={limit}&srnamespace=0&format=json"
+    )
+    try:
+        with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return [], []
+        hits = resp.json().get("query", {}).get("search", [])
+        titles = [h["title"] for h in hits if isinstance(h, dict) and isinstance(h.get("title"), str)]
+    except (httpx.TimeoutException, httpx.RequestError, ValueError, AttributeError, KeyError):
+        return [], []
+    urls = [f"https://en.wikipedia.org/wiki/{quote(t.replace(' ', '_'), safe='()')}" for t in titles]
+    return titles, urls
 
 
 # ── Tool: search_arxiv ────────────────────────────────────────────────────────

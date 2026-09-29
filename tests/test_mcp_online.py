@@ -270,6 +270,37 @@ class TestSearchWikipedia:
         assert "Python" in result
         assert "programming language" in result.lower()
 
+    def _patched(self, responses):
+        mock_client = MagicMock()
+        mock_client.get.side_effect = responses
+        patcher = patch("mcp_online_server.httpx.Client")
+        mock_client_cls = patcher.start()
+        mock_client_cls.return_value.__enter__ = lambda s: mock_client
+        mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
+        return patcher, mock_client
+
+    def test_fulltext_fallback_when_no_title_matches(self):
+        fulltext = MagicMock(status_code=200)
+        fulltext.json.return_value = {"query": {"search": [{"title": "Transformer (deep learning)"}]}}
+        patcher, client = self._patched([
+            self._make_search_response([], []), fulltext,
+            self._make_summary_response("The transformer is a neural network architecture."),
+        ])
+        try:
+            result = mos.search_wikipedia("transformer attention")
+        finally:
+            patcher.stop()
+        assert "**Transformer (deep learning)**" in result
+        assert "https://en.wikipedia.org/wiki/Transformer_(deep_learning)" in result
+        assert "list=search" in client.get.call_args_list[1].args[0]
+
+    def test_fulltext_fallback_failure_reports_nothing_found(self):
+        patcher, _ = self._patched([self._make_search_response([], []), MagicMock(status_code=500)])
+        try:
+            assert "No Wikipedia" in mos.search_wikipedia("zzqq")
+        finally:
+            patcher.stop()
+
     def test_empty_query_returns_error(self):
         result = mos.search_wikipedia("   ")
         assert "[error]" in result
