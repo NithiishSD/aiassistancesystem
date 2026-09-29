@@ -57,7 +57,8 @@ from scratch.
 | Web / browser | `web_agent.py` | Tier-2 confirmation is *injected*; default callback denies. The planner never sees page text: a tool-less extractor returns validated typed fields, page-proposed URLs are limited to the user's domains, typed text must come from the user's request, and every confirmation shows whether each target came from the user or from the page (B1). |
 | Academic tracker | `academic_tracker.py` | Own structured JSON store — aggregation queries, not semantic similarity. |
 | Wake-word | `wake_word.py` | **Q&A-only**; no path from a spoken utterance to `execute()`. |
-| Untrusted text | `text_sanitizer.py` | Strips zero-width and bidi-control characters before any model reads web text. Used by the web agent; research agent and MCP descriptions are pending (B6). |
+| Untrusted text | `text_sanitizer.py` | Strips zero-width and bidi-control characters before any model reads web pages, research sources, or MCP tool results; removes instruction-shaped sentences from MCP tool descriptions (B2/B6). |
+| MCP trust | `mcp_client.py` pinning | Tool definitions pinned by SHA-256 on first use (`data/mcp_tool_lock.json`); a changed definition disables that tool until reviewed (`python mcp_client.py --review`/`--accept`). Every server must declare `default_tier`; missing fails closed to Tier 2. |
 | Security | `security_module.py` | Vault, password gate, rotating single-use confirmation word, voice-print. |
 
 ## Planned additions (ROADMAP Phase F)

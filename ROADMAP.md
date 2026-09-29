@@ -37,10 +37,14 @@ contentless.
    *Status: fixed — see Phase A1.*
 2. **No evaluation of routing accuracy.** 488 unit tests, zero measurement of the thing
    that has historically broken most often.
+   *Status: fixed — see Phase A4.*
 3. **A live prompt-injection hole in the web agent** (Phase B1). Verified in code.
+   *Status: fixed — see Phase B1.*
 4. **MCP tool descriptions are trusted** in two places (Phase B2). Verified in code.
+   *Status: fixed — see Phase B2.*
 5. **No observability**: no per-turn trace, no token/cost accounting, no idea which of
    five providers actually answered.
+   *Status: fixed — see Phases C1 and C2.*
 6. **Not proactive.** It only ever speaks when spoken to.
 
 ---
@@ -158,15 +162,16 @@ rubber-stamping when the URL itself was chosen by injected text.
 - **Do not rely on a detector model** — guardrail classifiers fail >90% under adaptive
   pressure. Enforcement belongs in deterministic code.
 
-### B2. Treat MCP tool descriptions as untrusted
+### B2. Treat MCP tool descriptions as untrusted ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `harden-mcp-tool-metadata` (main spec `openspec/specs/mcp-tool-trust/`). Models and the router see `prompt_description` (tag blocks, instruction-shaped sentences and other-tool mentions removed); the tier gate keeps the full text. A missing/invalid `default_tier` now fails closed to Tier 2. Tool definitions are pinned by SHA-256 in `data/mcp_tool_lock.json` on first sight; a changed tool is disabled until `python mcp_client.py --review` / `--accept`.*
 Verified in code: `orchestrator._select_mcp_tool()` interpolates every tool's
 `description` into an LLM prompt, and `tier_gate.classify()` derives risk escalation from
 that same description — so a server that describes a writing tool as "reads data" stays
 Tier 1. **That lane fails open.**
-- [ ] Strip imperative/instruction-like content from descriptions before they enter any prompt.
-- [ ] Make `default_tier` in `mcp_servers.json` mandatory per server and treat it as the
+- [x] Strip imperative/instruction-like content from descriptions before they enter any prompt.
+- [x] Make `default_tier` in `mcp_servers.json` mandatory per server and treat it as the
       floor, rather than inferring risk from prose.
-- [ ] Hash/version-lock servers; detect metadata drift ("rug pull").
+- [x] Hash/version-lock servers; detect metadata drift ("rug pull").
 
 ### B3. Keep API keys out of the sandbox
 `.env` values live in the ambient process environment, so code executed in-process could
@@ -185,10 +190,10 @@ crafted page could still induce a malicious link.
 Block's red team got code execution on employee laptops through its own Goose agent.
 The payload was **zero-width Unicode instructions hidden in calendar invites and shared
 workflow files**. The user saw nothing and the model read everything.
-- [~] A ~20-line sanitizer that strips zero-width and bidi-control characters from all
+- [x] A ~20-line sanitizer that strips zero-width and bidi-control characters from all
       untrusted text (web pages, fetched URLs, RAG sources, tool descriptions) before any
       LLM sees it. Goes in `web_agent.py`, `research_agent.py`, and the MCP registration path.
-      *Partly done:* `text_sanitizer.py` exists and the web agent uses it (via B1). Still to do: `research_agent.py` and MCP descriptions.
+      *Done:* the web agent (B1), research sources, every MCP tool result, and MCP descriptions (B2).
 - [ ] OpenHands-style risk label: the LLM states LOW/MEDIUM/HIGH inside the tool call,
       at no extra inference cost. The effective tier is `max(rule tier, LLM risk)`, so the
       model can raise a tier but never lower it. That fits the tier gate's

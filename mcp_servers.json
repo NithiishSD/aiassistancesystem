@@ -5,7 +5,8 @@
     "command": "python3",
     "args": ["-m", "mcp_demo_server"],
     "cwd": ".",
-    "timeout": 10
+    "timeout": 10,
+    "default_tier": 1
   },
   {
     "name": "online_tools",
@@ -13,7 +14,8 @@
     "command": "python3",
     "args": ["-m", "mcp_online_server"],
     "cwd": ".",
-    "timeout": 15
+    "timeout": 15,
+    "default_tier": 1
   },
   {
     "name": "playwright_tools",
@@ -30,7 +32,8 @@
     "command": "python3",
     "args": ["-m", "mcp_github_server"],
     "cwd": ".",
-    "timeout": 15
+    "timeout": 15,
+    "default_tier": 1
   },
   {
     "name": "weather_news_tools",
@@ -38,7 +41,8 @@
     "command": "python3",
     "args": ["-m", "mcp_weather_news_server"],
     "cwd": ".",
-    "timeout": 15
+    "timeout": 15,
+    "default_tier": 1
   },
   {
     "name": "codeforces_tools",
@@ -46,7 +50,8 @@
     "command": "python3",
     "args": ["-m", "mcp_codeforces_server"],
     "cwd": ".",
-    "timeout": 15
+    "timeout": 15,
+    "default_tier": 1
   },
   {
     "name": "semantic_scholar_tools",
@@ -54,6 +59,7 @@
     "command": "python3",
     "args": ["-m", "mcp_semantic_scholar_server"],
     "cwd": ".",
-    "timeout": 20
+    "timeout": 20,
+    "default_tier": 1
   }
 ]

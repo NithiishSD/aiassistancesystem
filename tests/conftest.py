@@ -3,10 +3,12 @@
 Tests must never write the owner's real data files. The provider usage counter
 (llm_provider, data/provider_usage.json) resolves its path from
 ZEDEK_PROVIDER_USAGE_PATH at call time, so point it at a temp file for the
-whole session.
+whole session. The same applies to the MCP tool lock (mcp_client,
+data/mcp_tool_lock.json) via ZEDEK_MCP_LOCK_PATH.
 """
 
 import os
+import tempfile
 
 import pytest
 
@@ -21,3 +23,22 @@ def _isolate_provider_usage_file(tmp_path_factory):
         os.environ.pop("ZEDEK_PROVIDER_USAGE_PATH", None)
     else:
         os.environ["ZEDEK_PROVIDER_USAGE_PATH"] = previous
+
+
+# The MCP lock must be redirected before collection: importing orchestrator
+# runs MCP discovery (and pinning) at module load, before any fixture exists.
+_previous_lock_path = None
+
+
+def pytest_configure(config):
+    global _previous_lock_path
+    _previous_lock_path = os.environ.get("ZEDEK_MCP_LOCK_PATH")
+    lock_dir = tempfile.mkdtemp(prefix="zedek_mcp_lock_")
+    os.environ["ZEDEK_MCP_LOCK_PATH"] = os.path.join(lock_dir, "mcp_tool_lock.json")
+
+
+def pytest_unconfigure(config):
+    if _previous_lock_path is None:
+        os.environ.pop("ZEDEK_MCP_LOCK_PATH", None)
+    else:
+        os.environ["ZEDEK_MCP_LOCK_PATH"] = _previous_lock_path

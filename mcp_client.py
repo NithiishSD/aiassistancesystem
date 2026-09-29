@@ -12,6 +12,15 @@ Public synchronous API:
     call_mcp_tool(qualified_name, args) -> dict
     get_tool_registry() -> dict[str, MCPToolSpec]
     get_discovery_stats() -> dict
+    drifted_tools() -> dict
+    accept_tool_changes(qualified_names=None) -> list[str]
+
+Trust (ROADMAP B2): tool descriptions and results are third-party text.
+    - description         raw text minus invisible chars; tier gate only
+    - prompt_description  instruction-stripped; the only form a model sees
+    - every tool definition is pinned by hash on first sight; a changed
+      definition is left out of the registry until the user accepts it
+      (`python mcp_client.py --review` / `--accept`)
 
 All asyncio and MCP protocol logic is encapsulated inside _async_discover()
 and _async_call_tool(), which are driven by asyncio.run() internally.
@@ -20,12 +29,15 @@ and _async_call_tool(), which are driven by asyncio.run() internally.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Any
 
+from text_sanitizer import sanitize_tool_description, strip_invisible
 from zedek_logger import get_logger
 
 log = get_logger("mcp_client")
@@ -39,6 +51,13 @@ _CONFIG_PATH = os.path.join(_PROJECT_ROOT, "mcp_servers.json")
 
 _DISCOVERY_TIMEOUT_DEFAULT: float = 10.0   # per server: startup + init + list_tools
 _CALL_TIMEOUT_DEFAULT: float = 15.0        # per tool call (can be overridden via server config)
+
+# A server that does not declare a valid default_tier is treated as risky.
+_MISSING_DEFAULT_TIER = 2
+
+# Pinned tool definitions. Resolved at call time so tests can redirect it.
+_DEFAULT_LOCK_PATH = os.path.join(_PROJECT_ROOT, "data", "mcp_tool_lock.json")
+_LOCK_VERSION = 1
 
 
 # ── Internal error taxonomy ───────────────────────────────────────────────────
@@ -79,7 +98,7 @@ class MCPServerConfig:
     cwd: str
     description: str | None
     timeout: float  # used for both discovery and tool-call timeouts
-    default_tier: int  # server-level risk floor; 0-3, defaults to 1 if absent from config
+    default_tier: int  # server-level risk floor; 0-3, mandatory (missing/invalid -> 2)
 
 
 @dataclass(frozen=True)
@@ -94,6 +113,10 @@ class MCPToolSpec:
     description: str
     input_schema: dict
     qualified_name: str
+    # Instruction-stripped description: the only form given to a model or the
+    # router (read it via text_sanitizer.model_facing_description). None means
+    # not computed yet. `description` keeps the full text for the tier gate.
+    prompt_description: str | None = None
 
 
 # ── Internal module-level registries ─────────────────────────────────────────
@@ -206,15 +229,23 @@ def _load_config() -> list[MCPServerConfig]:
         except (TypeError, ValueError):
             timeout = _DISCOVERY_TIMEOUT_DEFAULT
 
-        raw_default_tier = entry.get("default_tier", 1)
-        try:
-            default_tier = int(raw_default_tier)
-            if default_tier not in (0, 1, 2, 3):
-                log.info("mcp_config_invalid_default_tier",
-                         extra={"server_name": name, "value": raw_default_tier})
-                default_tier = 1  # fail safe: back to MCP default
-        except (TypeError, ValueError):
-            default_tier = 1
+        # Mandatory risk floor. Missing or invalid fails closed to Tier 2
+        # (confirm) rather than silently inheriting the MCP baseline.
+        if "default_tier" not in entry:
+            log.warning("mcp_config_default_tier_missing",
+                        extra={"server_name": name, "applied": _MISSING_DEFAULT_TIER})
+            default_tier = _MISSING_DEFAULT_TIER
+        else:
+            raw_default_tier = entry["default_tier"]
+            valid = isinstance(raw_default_tier, int) and not isinstance(raw_default_tier, bool) \
+                and raw_default_tier in (0, 1, 2, 3)
+            if valid:
+                default_tier = raw_default_tier
+            else:
+                log.warning("mcp_config_invalid_default_tier",
+                            extra={"server_name": name, "value": str(raw_default_tier),
+                                   "applied": _MISSING_DEFAULT_TIER})
+                default_tier = _MISSING_DEFAULT_TIER
 
         seen_names.add(name)
         configs.append(MCPServerConfig(
@@ -391,12 +422,140 @@ def _normalize_tool_result(call_result: Any) -> dict:
         else:
             parts.append(str(item))
 
-    combined = "\n".join(parts)
+    # Tool output is third-party text; strip hidden characters before any model sees it.
+    combined = strip_invisible("\n".join(parts))
 
     if is_error:
         return {"result": None, "error": combined or "MCP tool returned an error"}
 
     return {"result": combined, "error": None}
+
+
+# ── Tool pinning (rug-pull detection) ─────────────────────────────────────────
+# Trust on first use: the first definition seen for a tool is pinned. A later
+# definition with a different hash is left out of the registry until the user
+# reviews and accepts it, because a changed description can poison the
+# tool-selection prompt before any gate runs.
+
+_DRIFTED: dict[str, dict] = {}  # qualified_name -> {"old": pin, "new": pin}
+
+
+def _lock_path() -> str:
+    return os.environ.get("ZEDEK_MCP_LOCK_PATH") or _DEFAULT_LOCK_PATH
+
+
+def _pin_for(description: str, input_schema: dict) -> dict:
+    """Pin record for a raw definition. Hashes the raw text, so an
+    invisible-character-only change still counts as drift."""
+    payload = json.dumps({"description": description, "input_schema": input_schema},
+                         sort_keys=True, ensure_ascii=False)
+    return {
+        "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        "description": description,
+        "input_schema": input_schema,
+    }
+
+
+def _load_lock() -> dict[str, dict]:
+    path = _lock_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        tools = data["tools"]
+        if data.get("version") != _LOCK_VERSION or not isinstance(tools, dict):
+            raise ValueError("unexpected lock format")
+        return {q: pin for q, pin in tools.items() if isinstance(pin, dict) and "sha256" in pin}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # Refusing every tool forever would leave no recovery short of deleting
+        # files; move the bad lock aside loudly and re-pin.
+        aside = f"{path}.corrupt-{int(time.time())}"
+        try:
+            os.replace(path, aside)
+        except OSError:
+            aside = ""
+        log.warning("mcp_tool_lock_corrupt", extra={"error": str(exc), "moved_to": aside})
+        return {}
+
+
+def _save_lock(pins: dict[str, dict]) -> None:
+    path = _lock_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"version": _LOCK_VERSION, "tools": pins}, fh, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _apply_pins(tools: list[MCPToolSpec]) -> list[MCPToolSpec]:
+    """Pin unseen tools, drop drifted ones. Tools carry their RAW description here."""
+    global _DRIFTED
+    pins = _load_lock()
+    drifted: dict[str, dict] = {}
+    kept: list[MCPToolSpec] = []
+    changed = False
+    for tool in tools:
+        current = _pin_for(tool.description, tool.input_schema)
+        pinned = pins.get(tool.qualified_name)
+        if pinned is None:
+            pins[tool.qualified_name] = current
+            changed = True
+            log.info("mcp_tool_pinned", extra={"qualified_name": tool.qualified_name})
+            kept.append(tool)
+        elif pinned["sha256"] == current["sha256"]:
+            kept.append(tool)
+        else:
+            drifted[tool.qualified_name] = {"old": pinned, "new": current}
+            log.warning("mcp_tool_drift_blocked", extra={"qualified_name": tool.qualified_name})
+    if changed:
+        try:
+            _save_lock(pins)
+        except OSError as exc:
+            log.warning("mcp_tool_lock_write_failed", extra={"error": str(exc)})
+    _DRIFTED = drifted
+    return kept
+
+
+def _finalize_descriptions(tools: list[MCPToolSpec]) -> list[MCPToolSpec]:
+    """Split each raw description into the gate view and the model view."""
+    names = [t.tool_name for t in tools]
+    final: list[MCPToolSpec] = []
+    for tool in tools:
+        others = [n for n in names if n != tool.tool_name]
+        prompt_text, removed = sanitize_tool_description(tool.description, others)
+        if removed:
+            log.warning("mcp_description_sanitized",
+                        extra={"qualified_name": tool.qualified_name, "removed": removed})
+        final.append(replace(tool, description=strip_invisible(tool.description),
+                             prompt_description=prompt_text))
+    return final
+
+
+def drifted_tools() -> dict[str, dict]:
+    """Tools left out by the last discovery because their definition changed.
+
+    {qualified_name: {"old": {"description", ...}, "new": {...}}}
+    """
+    return {q: {"old": dict(d["old"]), "new": dict(d["new"])} for q, d in _DRIFTED.items()}
+
+
+def accept_tool_changes(qualified_names: list[str] | None = None) -> list[str]:
+    """Re-pin the current definitions of drifted tools (all by default).
+
+    Call discover_all_tools() afterwards to make them available.
+    """
+    targets = list(_DRIFTED) if qualified_names is None else [q for q in qualified_names if q in _DRIFTED]
+    if not targets:
+        return []
+    pins = _load_lock()
+    for qname in targets:
+        pins[qname] = _DRIFTED[qname]["new"]
+        log.warning("mcp_tool_change_accepted", extra={"qualified_name": qname})
+    _save_lock(pins)
+    for qname in targets:
+        _DRIFTED.pop(qname, None)
+    return targets
 
 
 # ── Public synchronous API ────────────────────────────────────────────────────
@@ -438,6 +597,9 @@ def discover_all_tools() -> list[MCPToolSpec]:
     # Sort for determinism
     all_tools.sort(key=lambda t: t.qualified_name)
 
+    # Rug-pull check on raw definitions, then split descriptions per consumer.
+    all_tools = _finalize_descriptions(_apply_pins(all_tools))
+
     # Deduplicate qualified names (first wins)
     seen_qnames: set[str] = set()
     deduped: list[MCPToolSpec] = []
@@ -463,6 +625,7 @@ def discover_all_tools() -> list[MCPToolSpec]:
         "server_count": len(configs),
         "tool_count": len(deduped),
         "failed_servers": failures,
+        "drifted_tools": len(_DRIFTED),
     }
 
     log.info("mcp_discovery_complete", extra=_LAST_STATS)
@@ -552,3 +715,41 @@ def get_discovery_stats() -> dict:
 def is_cache_stale() -> bool:
     """Return True if the config file has changed since last discovery."""
     return _current_fingerprint() != _CONFIG_FINGERPRINT
+
+
+# ── CLI: review / accept changed tool definitions ─────────────────────────────
+
+def _main(argv: list[str]) -> int:
+    import argparse
+    import logging
+
+    parser = argparse.ArgumentParser(description="Review MCP tool definitions that changed since they were pinned.")
+    parser.add_argument("--review", action="store_true", help="show changed tools (default)")
+    parser.add_argument("--accept", action="store_true", help="re-pin every changed tool after review")
+    args = parser.parse_args(argv)
+
+    logging.disable(logging.WARNING)  # keep discovery chatter off the review output
+    try:
+        discover_all_tools()
+    finally:
+        logging.disable(logging.NOTSET)
+    drift = drifted_tools()
+    if not drift:
+        print("No changed MCP tools. Everything matches its pinned definition.")
+        return 0
+    for qname, change in sorted(drift.items()):
+        print(f"== {qname}")
+        print(f"   pinned:  {change['old']['description']!r}")
+        print(f"   now:     {change['new']['description']!r}")
+        if change["old"]["input_schema"] != change["new"]["input_schema"]:
+            print("   input schema changed too")
+    if args.accept:
+        accepted = accept_tool_changes()
+        print(f"Accepted {len(accepted)} tool(s); they are available from the next start.")
+    else:
+        print("These tools are disabled. If the changes are expected, run: python mcp_client.py --accept")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

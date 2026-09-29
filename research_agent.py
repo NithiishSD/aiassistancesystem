@@ -27,6 +27,7 @@ from typing import Any
 import llm_provider
 import mcp_client
 import memory
+from text_sanitizer import strip_invisible
 from tier_gate import gate
 from zedek_logger import get_logger
 
@@ -248,7 +249,7 @@ Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
             if len(sources) >= self.max_sources:
                 return
             sources.append(Source(
-                label=f"S{counter}", origin=origin, content=_truncate(content), query=query,
+                label=f"S{counter}", origin=origin, content=_truncate(strip_invisible(content)), query=query,
             ))
             counter += 1
 

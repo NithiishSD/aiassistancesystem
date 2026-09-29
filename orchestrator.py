@@ -17,6 +17,7 @@ import json
 import os
 import re
 import ollama
+from text_sanitizer import model_facing_description
 from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import gate
@@ -69,6 +70,12 @@ def _init_mcp() -> None:
         tools = mcp_client.discover_all_tools()
         stats = mcp_client.get_discovery_stats()
         log.info("mcp_discovery_complete", extra=stats)
+        drifted = mcp_client.drifted_tools()
+        if drifted:
+            log.warning("mcp_tools_disabled_changed_definition", extra={
+                "tools": sorted(drifted),
+                "hint": "review with: python mcp_client.py --review",
+            })
         if tools:
             classifier.register_mcp_tools(tools)
     except Exception as e:
@@ -517,7 +524,11 @@ def _select_mcp_tool(user_input: str, target_tool_qname: str | None = None) -> m
         return next(iter(registry.values()))
 
     # 2. Semantic selection via LLM if multiple tools exist
-    tool_list_str = "\n".join(f"- {spec.qualified_name}: {spec.description}" for spec in registry.values())
+    # prompt_description: third-party text with instruction-like sentences removed (ROADMAP B2).
+    tool_list_str = "\n".join(
+        f"- {spec.qualified_name}: {model_facing_description(spec)}"
+        for spec in registry.values()
+    )
     prompt = (
         f"Pick the single most appropriate tool for this user request from the list below.\n"
         f"User request: '{user_input}'\n"

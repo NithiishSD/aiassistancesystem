@@ -29,6 +29,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip netwo
 from semantic_router import Route, RouteLayer
 # pyrefly: ignore [missing-import]
 from semantic_router.encoders import HuggingFaceEncoder
+from text_sanitizer import model_facing_description
 from zedek_logger import get_logger
 
 log = get_logger("classifier")
@@ -758,7 +759,8 @@ def register_mcp_tools(tools: list) -> None:
     # Extract new utterances from tools, sorted deterministically
     new_utterances: list[str] = []
     for tool in sorted(tools, key=lambda t: getattr(t, "qualified_name", "")):
-        desc = getattr(tool, "description", "") or ""
+        # Model-facing text only: instruction-like sentences removed (ROADMAP B2).
+        desc = model_facing_description(tool)
         tool_name = getattr(tool, "tool_name", "") or ""
         if desc:
             phrase = f"{tool_name}: {desc}"
