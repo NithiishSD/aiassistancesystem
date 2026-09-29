@@ -119,7 +119,14 @@ be bimodal and miscalibrated, clustering at >0.95 or <0.05 and skipping the midd
 and mandatory confirmation on risky actions. B1 and B2 are real and worth doing properly.
 B3–B5 are hygiene. None of it is an emergency.*
 
-### B1. Quarantine web-page content from the planner ⚠️ highest real risk
+### B1. Quarantine web-page content from the planner ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `2026-09-29-quarantine-web-observations`; main spec in `openspec/specs/web-agent/`.*
+*Follow-ups from the live run:*
+- [ ] Stop deterministically when the latest ok step reports `goal_satisfied=True`. The planner ignored that instruction
+      and spent 3 steps (3 confirmations) reading one page.
+- [ ] Ask the extractor only for links as they appear on the page. It invented `example.com/learn-more`.
+      That is contained, since it is on the user's domain and labelled "from page content", but it is noise.
+
 `web_agent.decide_next_action()` pastes raw scraped page text (`observation[:400]`) into
 the prompt of the LLM that then **chooses the next tool and its arguments**. That is a
 privileged model consuming attacker-controlled input — the architecture every 2026
@@ -166,9 +173,10 @@ crafted page could still induce a malicious link.
 Block's red team got code execution on employee laptops through its own Goose agent.
 The payload was **zero-width Unicode instructions hidden in calendar invites and shared
 workflow files**. The user saw nothing and the model read everything.
-- [ ] A ~20-line sanitizer that strips zero-width and bidi-control characters from all
+- [~] A ~20-line sanitizer that strips zero-width and bidi-control characters from all
       untrusted text (web pages, fetched URLs, RAG sources, tool descriptions) before any
       LLM sees it. Goes in `web_agent.py`, `research_agent.py`, and the MCP registration path.
+      *Partly done:* `text_sanitizer.py` exists and the web agent uses it (via B1). Still to do: `research_agent.py` and MCP descriptions.
 - [ ] OpenHands-style risk label: the LLM states LOW/MEDIUM/HIGH inside the tool call,
       at no extra inference cost. The effective tier is `max(rule tier, LLM risk)`, so the
       model can raise a tier but never lower it. That fits the tier gate's
