@@ -104,12 +104,12 @@
       "support": 11
     },
     "general_question": {
-      "precision": 0.9167,
+      "precision": 1.0,
       "recall": 1.0,
-      "f1": 0.9565,
+      "f1": 1.0,
       "support": 11
     }
   },
   "accuracy": 0.2995,
-  "escalation_rate": 0.7433
+  "escalation_rate": 0.754
 }

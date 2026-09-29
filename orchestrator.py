@@ -361,8 +361,7 @@ def route_request(user_input: str) -> dict:
     """
     log.info("routing_started", extra={"user_input": user_input})
 
-    normalized = (user_input or "").strip().lower()
-    if normalized in {"ok", "okay", "alright", "thanks", "thank you", "thank u", "ty", "thx", "got it", "understood", "sounds good", "appreciate it"} or any(phrase in normalized for phrase in ["thank you", "thanks", "thank u", "thx", "ty", "got it", "understood", "appreciate it"]) and len(normalized.split()) <= 6:
+    if classifier.is_acknowledgement(user_input):
         log.info("routing_acknowledgement_guard", extra={"user_input": user_input})
         return {"function": None, "domain": classifier.classify_domain(user_input), "confidence": "high", "score": 0.0, "args": {}, "clarify": False}
 

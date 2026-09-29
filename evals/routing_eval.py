@@ -69,7 +69,7 @@ def build_static_router():
 
 def classify_offline(router, text: str) -> tuple[str, float]:
     """Mirror classify_intent() up to, but never including, the LLM fallback."""
-    if clf._is_acknowledgement_or_confirmation(text):
+    if clf.is_acknowledgement(text):
         return GENERAL, 0.0
     if clf._is_unsupported_action_request(text):
         return "unsupported", 1.0

@@ -616,40 +616,41 @@ def query_llm_with_tools(text: str) -> dict:
 
 # ── Pre-classification guards ─────────────────────────────────────────────────
 
-def _is_acknowledgement_or_confirmation(text: str) -> bool:
-    """Treat short gratitude/acknowledgment phrases as neutral and non-correction."""
-    if text is None:
+# Words that make a message an acknowledgement. A message short-circuits only if
+# EVERY word is in ACK_CORE or ACK_FILLER and at least one core signal is present,
+# so it can never also contain a request. Matching is by whole words: the old
+# substring check read "type", "capacity", "facebook" and "book" as "ty"/"ok".
+ACK_CORE = {
+    "ok", "okay", "okie", "k", "kk", "alright", "thanks", "thank", "thanku", "thankyou",
+    "thx", "ty", "tysm", "understood", "noted", "appreciate", "appreciated", "cheers",
+}
+ACK_FILLER = {
+    "you", "u", "so", "much", "a", "lot", "very", "really", "for", "the", "that", "thats",
+    "this", "it", "all", "again", "bro", "man", "dude", "buddy", "zedek", "cool", "great",
+    "nice", "perfect", "awesome", "fine", "good", "sounds", "got", "now", "then", "oh", "ah",
+}
+_ACK_PAIRS = {("got", "it"), ("sounds", "good")}
+MAX_ACK_WORDS = 8
+
+
+def is_acknowledgement(text: str | None) -> bool:
+    """True only for a pure "thanks / okay / got it" message.
+
+    Every word must be acknowledgement or filler vocabulary, with at least one
+    core signal ("cool" or "fine" alone may be answering Zedek's question, so
+    they route normally). "thanks, now find my resume file" is a request.
+    Shared by orchestrator.route_request() and classify_intent().
+    """
+    if not text:
         return False
-
-    cleaned = re.sub(r"[^a-z0-9\s]", " ", text.lower()).strip()
-    if not cleaned:
+    tokens = re.sub(r"[^a-z0-9\s]", " ", text.lower().replace("'", "")).split()
+    if not tokens or len(tokens) > MAX_ACK_WORDS:
         return False
-
-    short_ack_phrases = {
-        "ok",
-        "okay",
-        "alright",
-        "thanks",
-        "thank you",
-        "thank u",
-        "ty",
-        "thx",
-        "got it",
-        "understood",
-        "sounds good",
-        "appreciate it",
-        "okay thank you",
-        "ok thank you",
-    }
-
-    if cleaned in short_ack_phrases:
-        return True
-
-    if any(phrase in cleaned for phrase in ["thank you", "thanks", "thank u", "thx", "ty", "got it", "understood", "appreciate it"]):
-        return True
-
-    # A brief acknowledgment should not be treated as a correction simply because it is short.
-    return len(cleaned.split()) <= 4 and any(word in cleaned for word in ["okay", "ok", "thanks", "thank", "got", "understood"])
+    if any(token not in ACK_CORE and token not in ACK_FILLER for token in tokens):
+        return False
+    has_core = any(token in ACK_CORE for token in tokens) or any(
+        pair in _ACK_PAIRS for pair in zip(tokens, tokens[1:]))
+    return has_core
 
 
 def _is_unsupported_action_request(text: str) -> bool:
@@ -729,7 +730,7 @@ def classify_intent(text: str) -> dict:
     """
     global _ROUTING_CACHE
 
-    if _is_acknowledgement_or_confirmation(text):
+    if is_acknowledgement(text):
         log.info("intent_classified_acknowledgement", extra={"text": text})
         return {"function": None, "confidence": "high", "score": 0.0, "via_llm": False}
 

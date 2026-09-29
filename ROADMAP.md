@@ -92,6 +92,9 @@ junk ~1.4–2.0). `answer_general_question()` still injects top-3 unconditionall
 remember/correct fact, detailed-process, and research. It found a production bug: the acknowledgement guard matches "ty"/"ok"
 as substrings, so "type…", "…capacity…", "facebook", and "book…" never reach Layer 1 or the LLM. Next change fixes it.*
 *Also fixed: `requirements.txt` could not be installed from scratch (numpy pin vs semantic-router's stale numpy<2 cap).*
+*Acknowledgement-guard fix (OpenSpec `fix-acknowledgement-guard`): one whole-word check shared by the orchestrator and the classifier. The orchestrator had its own buggy copy that the eval could not see. End to end, **7/9 formerly swallowed requests now route correctly (was 0/9)**. Offline, only `general_question` precision moves (0.917 → 1.000), because the gated eval scores "sent to the LLM" the same as "dropped".*
+- [ ] Follow-up: tests rewrite the real `data/dynamic_utterances.json` (importing `orchestrator` runs `register_mcp_tools()`). The contents are idempotent, but tests must not write user data.
+- [ ] Follow-up: "port" in `AMBIGUOUS_TERMS` makes "port this javascript to typescript" stop for a clarifying question.
 
 Routing is the historical failure point and is completely unmeasured. ~16 intents and 27
 MCP tools now compete for phrasings; measured industry data shows routing accuracy
