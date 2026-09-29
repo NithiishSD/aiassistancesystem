@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable
+from typing import Any, Callable, Iterator, Protocol
 
 import requests
 from dotenv import load_dotenv
@@ -310,6 +310,123 @@ def _int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+# ── Reply streaming (ROADMAP D2) ────────────────────────────────────────────
+
+class StreamSink(Protocol):
+    """Receives a chat reply as it is generated. All calls happen on the caller's thread."""
+
+    def delta(self, text: str) -> None:
+        """The next piece of visible answer text, in order."""
+
+    def restart(self) -> None:
+        """Discard what was shown so far; a different provider's answer follows."""
+
+
+class _ThinkFilter:
+    """Streaming counterpart of strip_thinking_tags: drops <think>...</think> and
+    stray closing tags even when a tag is split across chunks."""
+
+    _OPEN, _CLOSE = "<think>", "</think>"
+
+    def __init__(self) -> None:
+        self._inside = False
+        self._held = ""
+
+    @staticmethod
+    def _partial_tag_len(text: str, tags: tuple[str, ...]) -> int:
+        """Length of the longest suffix of text that could start one of tags."""
+        lowered = text.lower()
+        for size in range(min(len(lowered), max(map(len, tags)) - 1), 0, -1):
+            if any(tag.startswith(lowered[-size:]) for tag in tags):
+                return size
+        return 0
+
+    def feed(self, chunk: str) -> str:
+        text, out = self._held + chunk, []
+        self._held = ""
+        while text:
+            lowered = text.lower()
+            if self._inside:
+                end = lowered.find(self._CLOSE)
+                if end < 0:
+                    self._held = text[len(text) - self._partial_tag_len(text, (self._CLOSE,)):]
+                    break
+                text, self._inside = text[end + len(self._CLOSE):], False
+                continue
+            hits = [(i, tag) for tag in (self._OPEN, self._CLOSE) if (i := lowered.find(tag)) >= 0]
+            if not hits:
+                keep = self._partial_tag_len(text, (self._OPEN, self._CLOSE))
+                out.append(text[:len(text) - keep])
+                self._held = text[len(text) - keep:]
+                break
+            index, tag = min(hits)
+            out.append(text[:index])
+            text = text[index + len(tag):]
+            self._inside = tag == self._OPEN
+        return "".join(out)
+
+    def flush(self) -> str:
+        """End of reply: a held fragment that never became a tag is text."""
+        held, self._held = self._held, ""
+        return "" if self._inside else held
+
+
+class _StreamRelay:
+    """One chat call's link to a StreamSink: filters think blocks, trims leading
+    whitespace, restarts the sink between providers, and never lets a sink
+    error reach the provider chain."""
+
+    def __init__(self, sink: StreamSink) -> None:
+        self._sink: StreamSink | None = sink
+        self._filter = _ThinkFilter()
+        self.emitted = False
+        self.first_token_at: float | None = None
+
+    def begin_attempt(self) -> None:
+        if self.emitted:
+            self._call("restart")
+        self.emitted = False
+        self.first_token_at = None
+        self._filter = _ThinkFilter()
+
+    def feed(self, chunk: str) -> None:
+        self._emit(self._filter.feed(chunk or ""))
+
+    def finish(self) -> None:
+        self._emit(self._filter.flush())
+
+    def _emit(self, visible: str) -> None:
+        if not self.emitted:
+            visible = visible.lstrip()
+        if not visible:
+            return
+        if self.first_token_at is None:
+            self.first_token_at = time.perf_counter()
+        self.emitted = True
+        self._call("delta", visible)
+
+    def _call(self, method: str, *args: str) -> None:
+        if self._sink is None:
+            return
+        try:
+            getattr(self._sink, method)(*args)
+        except Exception as error:  # a broken display must not fail the answer
+            log.info("stream_sink_failed", extra={"method": method, "error": type(error).__name__})
+            self._sink = None
+
+
+def _sse_data(response: Any) -> Iterator[Any]:
+    """Parsed JSON payloads of a server-sent-events response, until [DONE]."""
+    for raw in response.iter_lines(decode_unicode=True):
+        line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        if not line or not line.startswith("data:"):
+            continue  # blank separators, comments (": keep-alive"), event: lines
+        payload = line[len("data:"):].strip()
+        if payload == "[DONE]":
+            return
+        yield json.loads(payload)
+
+
 # ── Schema-constrained output (ROADMAP F2) ──────────────────────────────────
 # Native constrained-output form per provider. A provider/model that rejects
 # its native form with HTTP 400 is recorded here and gets JSON mode plus the
@@ -395,6 +512,56 @@ def _post_openai_compatible(
     )
 
 
+def _stream_openai_compatible(
+    source: str,
+    endpoint: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    extra_headers: dict[str, str] | None,
+    on_delta: Callable[[str], None],
+) -> ProviderReply:
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    response = requests.post(
+        endpoint,
+        headers=headers,
+        json={"model": model, "messages": messages, "stream": True},
+        timeout=REQUEST_TIMEOUT,  # per read, so it bounds silence, not total length
+        stream=True,
+    )
+    try:
+        response.raise_for_status()
+        parts: list[str] = []
+        reported: Any = None
+        usage: dict[str, Any] = {}
+        for data in _sse_data(response):
+            if not isinstance(data, dict):
+                continue
+            if isinstance(data.get("error"), dict) and not data.get("choices"):
+                _raise_embedded_error(source, data)
+            reported = data.get("model") or reported
+            groq_usage = data["x_groq"].get("usage") if isinstance(data.get("x_groq"), dict) else None
+            chunk_usage = data.get("usage") or groq_usage
+            if isinstance(chunk_usage, dict):
+                usage = chunk_usage
+            for choice in data.get("choices") or []:
+                content = (choice.get("delta") or {}).get("content")
+                if isinstance(content, str) and content:
+                    parts.append(content)
+                    on_delta(content)
+    finally:
+        response.close()
+    return ProviderReply(
+        text="".join(parts),
+        request_model=model,
+        response_model=reported if isinstance(reported, str) and reported else model,
+        input_tokens=_int_or_none(usage.get("prompt_tokens")),
+        output_tokens=_int_or_none(usage.get("completion_tokens")),
+    )
+
+
 def _openai_compatible(
     source: str,
     endpoint: str,
@@ -405,11 +572,15 @@ def _openai_compatible(
     extra_headers: dict[str, str] | None = None,
     schema: dict[str, Any] | None = None,
     schema_style: str = "hint",
+    on_delta: Callable[[str], None] | None = None,
 ) -> ProviderReply:
     """schema_style: "strict" (json_schema, strict), "nvext" (NIM guided_json),
-    or "hint" (json_object with the schema in the prompt)."""
+    or "hint" (json_object with the schema in the prompt). on_delta streams
+    plain-text replies only."""
     if not api_key:
         raise RuntimeError(f"{source} API key is not configured")
+    if on_delta is not None and schema is None and not json_mode:
+        return _stream_openai_compatible(source, endpoint, api_key, model, messages, extra_headers, on_delta)
 
     if schema is not None and schema_style != "hint" and (source, model) not in _SCHEMA_UNSUPPORTED:
         if schema_style == "strict":
@@ -431,20 +602,55 @@ def _openai_compatible(
     extra: dict[str, Any] = {"response_format": {"type": "json_object"}} if (json_mode or schema is not None) else {}
     return _post_openai_compatible(source, endpoint, api_key, model, messages, extra, extra_headers)
 
+def _gemini_stream(response: Any, model_name: str, on_delta: Callable[[str], None]) -> ProviderReply:
+    parts: list[str] = []
+    meta: dict[str, Any] = {}
+    reported: Any = None
+    for data in _sse_data(response):
+        if not isinstance(data, dict):
+            continue
+        if isinstance(data.get("usageMetadata"), dict):
+            meta = data["usageMetadata"]
+        reported = data.get("modelVersion") or reported
+        for candidate in data.get("candidates") or []:
+            for part in (candidate.get("content") or {}).get("parts") or []:
+                text = part.get("text")
+                if isinstance(text, str) and text and not part.get("thought"):
+                    parts.append(text)
+                    on_delta(text)
+    return ProviderReply(
+        text="".join(parts),
+        request_model=model_name,
+        response_model=reported if isinstance(reported, str) and reported else model_name,
+        input_tokens=_int_or_none(meta.get("promptTokenCount")),
+        output_tokens=_int_or_none(meta.get("candidatesTokenCount")),
+    )
+
+
 def _gemini_request(api_key: str, model_name: str, contents: list[dict],
-                    generation_config: dict[str, Any]) -> ProviderReply:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+                    generation_config: dict[str, Any],
+                    on_delta: Callable[[str], None] | None = None) -> ProviderReply:
+    method = "streamGenerateContent" if on_delta is not None else "generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:{method}"
+    params = {"key": api_key, "alt": "sse"} if on_delta is not None else {"key": api_key}
 
     # Try up to 2 times to handle transient 503/500 errors
     for attempt in range(2):
         try:
             response = requests.post(
                 url,
-                params={"key": api_key},
+                params=params,
                 json={"contents": contents, "generationConfig": generation_config},
                 timeout=REQUEST_TIMEOUT,
+                **({"stream": True} if on_delta is not None else {}),
             )
             response.raise_for_status()
+            if on_delta is not None:
+                # The 5xx retry around this fires before any chunk is read.
+                try:
+                    return _gemini_stream(response, model_name, on_delta)
+                finally:
+                    response.close()
             data = response.json()
             parts = data["candidates"][0]["content"]["parts"]
             meta = data.get("usageMetadata") if isinstance(data.get("usageMetadata"), dict) else {}
@@ -473,7 +679,8 @@ def _gemini_contents(messages: list[dict[str, str]]) -> list[dict]:
 
 
 def _gemini(messages: list[dict[str, str]], json_mode: bool,
-            schema: dict[str, Any] | None = None) -> ProviderReply:
+            schema: dict[str, Any] | None = None,
+            on_delta: Callable[[str], None] | None = None) -> ProviderReply:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
@@ -494,13 +701,15 @@ def _gemini(messages: list[dict[str, str]], json_mode: bool,
                 _mark_schema_unsupported("gemini", model_name)
         if schema is not None:
             msgs = _schema_hint(msgs, schema)
-        return _gemini_request(api_key, model_name, _gemini_contents(msgs), generation_config)
+        stream = on_delta if schema is None and not json_mode else None
+        return _gemini_request(api_key, model_name, _gemini_contents(msgs), generation_config, stream)
 
     return _with_model_fallback("gemini", lambda: _model_for("gemini", "GEMINI_MODEL", resolve_gemini_model), send)
 
 
 def _groq(messages: list[dict[str, str]], json_mode: bool,
-          schema: dict[str, Any] | None = None) -> ProviderReply:
+          schema: dict[str, Any] | None = None,
+          on_delta: Callable[[str], None] | None = None) -> ProviderReply:
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         raise RuntimeError("groq API key is not configured")
@@ -515,13 +724,15 @@ def _groq(messages: list[dict[str, str]], json_mode: bool,
             json_mode,
             schema=schema,
             schema_style="strict" if model.startswith(GROQ_STRICT_SCHEMA_PREFIXES) else "hint",
+            on_delta=on_delta,
         )
 
     return _with_model_fallback("groq", lambda: _model_for("groq", "GROQ_MODEL", resolve_groq_model), send)
 
 
 def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool,
-                schema: dict[str, Any] | None = None) -> ProviderReply:
+                schema: dict[str, Any] | None = None,
+                on_delta: Callable[[str], None] | None = None) -> ProviderReply:
     api_key = os.getenv("NVIDIA_API_KEY", "")
     if not api_key:
         raise RuntimeError("nvidia_nim API key is not configured")
@@ -536,13 +747,15 @@ def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool,
             json_mode,
             schema=schema,
             schema_style="nvext",
+            on_delta=on_delta,
         )
 
     return _with_model_fallback("nvidia_nim", lambda: _model_for("nvidia_nim", "NVIDIA_MODEL", resolve_nvidia_model), send)
 
 
 def _openrouter(messages: list[dict[str, str]], json_mode: bool,
-                schema: dict[str, Any] | None = None) -> ProviderReply:
+                schema: dict[str, Any] | None = None,
+                on_delta: Callable[[str], None] | None = None) -> ProviderReply:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY", "")
     if not api_key:
         raise RuntimeError("openrouter API key is not configured")
@@ -561,6 +774,7 @@ def _openrouter(messages: list[dict[str, str]], json_mode: bool,
             },
             schema=schema,
             schema_style="hint",  # free-model support varies
+            on_delta=on_delta,
         )
 
     return _with_model_fallback(
@@ -568,7 +782,8 @@ def _openrouter(messages: list[dict[str, str]], json_mode: bool,
 
 
 def _cerebras(messages: list[dict[str, str]], json_mode: bool,
-              schema: dict[str, Any] | None = None) -> ProviderReply:
+              schema: dict[str, Any] | None = None,
+              on_delta: Callable[[str], None] | None = None) -> ProviderReply:
     api_key = os.getenv("CEREBRAS_API_KEY", "")
     if not api_key:
         raise RuntimeError("cerebras API key is not configured")
@@ -583,6 +798,7 @@ def _cerebras(messages: list[dict[str, str]], json_mode: bool,
             json_mode,
             schema=schema,
             schema_style="strict",
+            on_delta=on_delta,
         )
 
     return _with_model_fallback(
@@ -598,8 +814,31 @@ def _field(obj: Any, key: str) -> Any:
         return getattr(obj, key, None)
 
 
+def _local_stream(messages: list[dict[str, str]], on_delta: Callable[[str], None]) -> ProviderReply:
+    parts: list[str] = []
+    last: Any = None
+    for chunk in ollama.chat(model=LOCAL_MODEL, messages=messages, stream=True):
+        last = chunk
+        message = _field(chunk, "message")
+        content = _field(message, "content") if message is not None else None
+        if isinstance(content, str) and content:
+            parts.append(content)
+            on_delta(content)
+    reported = _field(last, "model") if last is not None else None
+    return ProviderReply(
+        text="".join(parts),
+        request_model=LOCAL_MODEL,
+        response_model=reported if isinstance(reported, str) and reported else LOCAL_MODEL,
+        input_tokens=_int_or_none(_field(last, "prompt_eval_count")) if last is not None else None,
+        output_tokens=_int_or_none(_field(last, "eval_count")) if last is not None else None,
+    )
+
+
 def _local(messages: list[dict[str, str]], json_mode: bool,
-           schema: dict[str, Any] | None = None) -> ProviderReply:
+           schema: dict[str, Any] | None = None,
+           on_delta: Callable[[str], None] | None = None) -> ProviderReply:
+    if on_delta is not None and schema is None and not json_mode:
+        return _local_stream(messages, on_delta)
     options: dict[str, Any] = {}
     if json_mode or schema is not None:
         options["format"] = "json"
@@ -846,6 +1085,12 @@ GEN_AI_PROVIDER_NAMES = {
 }
 
 
+def _log_first_token(source: str, relay: "_StreamRelay", started: float) -> None:
+    if relay.first_token_at is not None:
+        log.info("stream_first_token", extra={
+            "source": source, "ms": round((relay.first_token_at - started) * 1000)})
+
+
 def _log_gen_ai_call(source: str, reply: "ProviderReply", started: float, task: str | None) -> None:
     """One standard record per successful LLM call. Never includes prompt or
     response text, only names, counts, and timing."""
@@ -872,10 +1117,16 @@ def _result(answer: str, source: str, reply: "ProviderReply") -> dict[str, Any]:
 
 
 def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool,
-                        task: str | None = None) -> dict[str, Any]:
+                        task: str | None = None, relay: "_StreamRelay | None" = None) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        reply = _local(messages, json_mode)
+        if relay is None:
+            reply = _local(messages, json_mode)
+        else:
+            relay.begin_attempt()
+            reply = _local(messages, json_mode, on_delta=relay.feed)
+            relay.finish()
+            _log_first_token("local", relay, started)
     except Exception as error:
         log.info("local_fallback_failed", extra={"error": _safe_error_text(error)})
         raise AllProvidersUnavailableError(
@@ -940,11 +1191,15 @@ def _structured_from(source: str, call: Callable[[list[dict[str, str]]], Provide
 
 
 def _call_provider(provider: Callable[..., ProviderReply], messages: list[dict[str, str]],
-                   json_mode: bool, schema: dict[str, Any] | None) -> ProviderReply:
-    # Keyword only when set, so two-argument provider stubs keep working.
-    if schema is None:
-        return provider(messages, json_mode)
-    return provider(messages, json_mode, schema=schema)
+                   json_mode: bool, schema: dict[str, Any] | None,
+                   on_delta: Callable[[str], None] | None = None) -> ProviderReply:
+    # Keywords only when set, so two-argument provider stubs keep working.
+    kwargs: dict[str, Any] = {}
+    if schema is not None:
+        kwargs["schema"] = schema
+    if on_delta is not None:
+        kwargs["on_delta"] = on_delta
+    return provider(messages, json_mode, **kwargs)
 
 
 def _run_local_structured(messages: list[dict[str, str]], task: str | None,
@@ -978,9 +1233,11 @@ def _dispatch(
     force_local: bool,
     task: str | None,
     response_model: type[BaseModel] | None = None,
+    stream: StreamSink | None = None,
 ) -> dict[str, Any]:
     """The provider chain shared by generate_chat and generate_structured."""
     schema = json_schema_for(response_model) if response_model is not None else None
+    relay = _StreamRelay(stream) if stream is not None and response_model is None and not json_mode else None
 
     if task == "coding" and not force_local:
         if not cloud_coding_allowed():
@@ -997,7 +1254,7 @@ def _dispatch(
 
     def finish_local() -> dict[str, Any]:
         if response_model is None:
-            return _run_local_or_raise(messages, json_mode, task)
+            return _run_local_or_raise(messages, json_mode, task, relay)
         return _run_local_structured(messages, task, response_model, schema)
 
     if force_local or not cloud_enabled():
@@ -1024,8 +1281,14 @@ def _dispatch(
                  provider: Callable[..., ProviderReply] = provider) -> ProviderReply:
             """One counted, traced request (re-asks included)."""
             started = time.perf_counter()
+            if relay is not None:
+                relay.begin_attempt()
             try:
-                reply = _call_provider(provider, msgs, json_mode, schema)
+                reply = _call_provider(provider, msgs, json_mode, schema,
+                                       relay.feed if relay is not None else None)
+                if relay is not None:
+                    relay.finish()
+                    _log_first_token(source, relay, started)
             except Exception as error:
                 if not _is_not_configured(error):
                     _record_failure(source, error)
@@ -1056,12 +1319,15 @@ def generate_chat(
     json_mode: bool = False,
     force_local: bool = False,
     task: str | None = None,
+    stream: StreamSink | None = None,
 ) -> dict[str, Any]:
     """Generate a response using a task-aware provider chain.
 
     Returns {"answer", "source", "model", "usage": {"input_tokens", "output_tokens"}}.
+    With `stream`, a plain-text reply is also delivered to the sink as it is
+    generated (ROADMAP D2); JSON replies never stream.
     """
-    return _dispatch(messages, json_mode, force_local, task)
+    return _dispatch(messages, json_mode, force_local, task, stream=stream)
 
 
 def generate_structured(
