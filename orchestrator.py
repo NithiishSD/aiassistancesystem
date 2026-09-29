@@ -1449,6 +1449,7 @@ if __name__ == "__main__":
         if user_input.lower() in ("quit", "exit"):
             print("Ending session — reviewing what's worth remembering long-term...")
             summarize_and_flush_session()
+            log.info("provider_stats_session_end", extra={"stats": llm_provider.provider_stats()})
             break
         if not user_input:
             continue

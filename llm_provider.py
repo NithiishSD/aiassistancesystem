@@ -6,9 +6,13 @@ resolve their models dynamically against each provider's live catalog.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import threading
 import time
+from dataclasses import dataclass
+from datetime import date
 from typing import Any, Callable
 
 import requests
@@ -52,12 +56,14 @@ OPENROUTER_CODING_CANDIDATES = [
     "google/gemma-2-9b-it:free",
     "qwen/qwen-2.5-72b-instruct:free",
 ]
+# Ordered by quota headroom: OpenRouter's :free tier allows only 50 requests/day
+# (verified against its docs), so it is never first in a chain.
 TASK_PROVIDERS: dict[str, list[str]] = {
-    "coding": ["nvidia_nim", "openrouter", "groq", "local"],
+    "coding": ["nvidia_nim", "groq", "openrouter", "local"],
     "evaluation": ["gemini", "groq", "cerebras", "openrouter", "local"],
     "general_qa": ["gemini", "groq", "cerebras", "local"],
     "fact_handling": ["gemini", "groq", "local"],
-    "process_reasoning": ["openrouter", "gemini", "cerebras", "local"],
+    "process_reasoning": ["gemini", "groq", "cerebras", "openrouter", "local"],
     "planning": ["groq", "gemini", "cerebras", "local"],
     "research": ["gemini", "groq", "cerebras", "local"],
 }
@@ -354,6 +360,192 @@ _PROVIDER_FUNCS: dict[str, Callable[[list[dict[str, str]], bool], str]] = {
 }
 
 
+# ── Quota awareness ──────────────────────────────────────────────────────────
+# Free-tier quota is the scarce resource. Without this, a provider that just
+# returned 429 is called again on the very next request, and nothing stops
+# OpenRouter's 50/day cap from being exceeded.
+
+# Only caps verified against provider docs. Others rely on 429 cooldowns.
+DAILY_REQUEST_BUDGETS: dict[str, int] = {"openrouter": 50}
+DEFAULT_RATE_LIMIT_COOLDOWN = 60.0
+MIN_COOLDOWN = 1.0
+MAX_COOLDOWN = 3600.0
+AUTH_FAILURE_COOLDOWN = 3600.0
+_DEFAULT_USAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "data", "provider_usage.json")
+_DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
+
+
+@dataclass
+class _ProviderHealth:
+    calls: int = 0
+    successes: int = 0
+    failures: int = 0
+    rate_limited: int = 0
+    cooldown_until: float = 0.0
+    last_error: str = ""
+
+
+_health: dict[str, _ProviderHealth] = {}
+_health_lock = threading.Lock()
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _reset_health_for_tests() -> None:
+    with _health_lock:
+        _health.clear()
+
+
+def _health_for(source: str) -> _ProviderHealth:
+    return _health.setdefault(source, _ProviderHealth())
+
+
+def _usage_path() -> str:
+    # Resolved per call so tests can redirect it (tests/conftest.py).
+    return os.getenv("ZEDEK_PROVIDER_USAGE_PATH") or _DEFAULT_USAGE_PATH
+
+
+def _load_usage() -> dict[str, int]:
+    """Today's request counts per provider. A missing or corrupt file is empty."""
+    try:
+        with open(_usage_path(), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        today = data.get(_today(), {}) if isinstance(data, dict) else {}
+        return {k: int(v) for k, v in today.items() if isinstance(v, (int, float))}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _increment_usage(source: str) -> None:
+    """Count one request that actually left the machine. Keeps only today."""
+    path = _usage_path()
+    with _health_lock:
+        counts = _load_usage()
+        counts[source] = counts.get(source, 0) + 1
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            temp = f"{path}.tmp"
+            with open(temp, "w", encoding="utf-8") as handle:
+                json.dump({_today(): counts}, handle, indent=2)
+            os.replace(temp, path)
+        except OSError as error:
+            log.info("provider_usage_save_failed", extra={"error": str(error)})
+
+
+def _parse_duration(value: Any) -> float | None:
+    """Seconds from "30", "2m59.56s", "450ms", "1h". None if unparseable."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    total, matched = 0.0, False
+    for amount, unit in _DURATION_RE.findall(text):
+        matched = True
+        total += float(amount) * {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}[unit]
+    return total if matched else None
+
+
+def _cooldown_for(status: int | None, headers: Any) -> float:
+    """How long to skip a provider after an HTTP error. 0 means don't skip."""
+    if status in (401, 403):
+        return AUTH_FAILURE_COOLDOWN
+    if status != 429:
+        return 0.0
+    lowered = {str(k).lower(): v for k, v in dict(headers or {}).items()}
+    for header in ("retry-after", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"):
+        seconds = _parse_duration(lowered.get(header))
+        if seconds is not None:
+            return min(max(seconds, MIN_COOLDOWN), MAX_COOLDOWN)
+    return DEFAULT_RATE_LIMIT_COOLDOWN
+
+
+def _is_not_configured(error: Exception) -> bool:
+    # Provider functions raise this before any network I/O when a key is missing.
+    return isinstance(error, RuntimeError) and "not configured" in str(error)
+
+
+def _skip_reason(source: str) -> tuple[str, dict[str, Any]] | None:
+    with _health_lock:
+        remaining = _health_for(source).cooldown_until - _now()
+    if remaining > 0:
+        return "cooldown", {"seconds_remaining": round(remaining, 1)}
+    budget = DAILY_REQUEST_BUDGETS.get(source)
+    if budget is not None:
+        used = _load_usage().get(source, 0)
+        if used >= budget:
+            return "daily_budget", {"used": used, "budget": budget}
+    return None
+
+
+def _record_success(source: str) -> None:
+    _increment_usage(source)
+    with _health_lock:
+        health = _health_for(source)
+        health.calls += 1
+        health.successes += 1
+
+
+def _record_failure(source: str, error: Exception) -> None:
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    cooldown = _cooldown_for(status, getattr(response, "headers", None))
+    _increment_usage(source)
+    with _health_lock:
+        health = _health_for(source)
+        health.calls += 1
+        health.failures += 1
+        health.last_error = _safe_error_text(error)[:200]
+        if status == 429:
+            health.rate_limited += 1
+        if cooldown > 0:
+            health.cooldown_until = max(health.cooldown_until, _now() + cooldown)
+    if cooldown > 0:
+        log.info("provider_cooldown_started", extra={
+            "source": source, "status": status, "seconds": round(cooldown, 1)})
+
+
+def provider_stats() -> dict[str, dict[str, Any]]:
+    """Per provider: session calls/successes/failures/rate limits, today's
+    requests, the daily budget, and any remaining cooldown."""
+    today = _load_usage()
+    now = _now()
+    stats: dict[str, dict[str, Any]] = {}
+    with _health_lock:
+        for source in _PROVIDER_FUNCS:
+            health = _health.get(source, _ProviderHealth())
+            stats[source] = {
+                "calls": health.calls,
+                "successes": health.successes,
+                "failures": health.failures,
+                "rate_limited": health.rate_limited,
+                "today": today.get(source, 0),
+                "budget": DAILY_REQUEST_BUDGETS.get(source),
+                "cooldown_remaining_s": round(max(0.0, health.cooldown_until - now), 1),
+            }
+    return stats
+
+
+def format_provider_stats(stats: dict[str, dict[str, Any]] | None = None) -> str:
+    stats = stats if stats is not None else provider_stats()
+    lines = []
+    for source, s in stats.items():
+        budget = f"/{s['budget']}" if s["budget"] is not None else ""
+        cooling = f", cooling {s['cooldown_remaining_s']:.0f}s" if s["cooldown_remaining_s"] else ""
+        lines.append(f"{source}: today {s['today']}{budget}, session {s['successes']}/{s['calls']} ok, "
+                     f"{s['rate_limited']} rate-limited{cooling}")
+    return "\n".join(lines)
+
+
 def strip_thinking_tags(text: str) -> str:
     """Remove reasoning/thinking traces (<think>...</think>) from LLM outputs."""
     if not isinstance(text, str):
@@ -413,13 +605,22 @@ def generate_chat(
         if provider is None:
             log.info("unknown_provider_in_chain", extra={"source": source})
             continue
+        skip = _skip_reason(source)
+        if skip is not None:
+            reason, detail = skip
+            log.info("provider_skipped", extra={"source": source, "reason": reason, **detail})
+            continue
         try:
             answer = provider(messages, json_mode)
-            cleaned_answer = strip_thinking_tags(answer) if not json_mode else answer
-            log.info("provider_response", extra={"source": source})
-            return {"answer": cleaned_answer, "source": source}
         except Exception as error:
+            if not _is_not_configured(error):
+                _record_failure(source, error)
             log.info("provider_failed", extra={"source": source, "error": _safe_error_text(error)})
+            continue
+        _record_success(source)
+        cleaned_answer = strip_thinking_tags(answer) if not json_mode else answer
+        log.info("provider_response", extra={"source": source})
+        return {"answer": cleaned_answer, "source": source}
 
     return _run_local_or_raise(messages, json_mode)
 

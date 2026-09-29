@@ -24,3 +24,6 @@ logs/watchdog_audit.jsonl
 # Raw research notes (the synthesized report in reports/ is committed)
 research_notes/
 chroma_db.backup-*/
+
+# Per-day LLM provider request counts (llm_provider quota tracking)
+data/provider_usage.json

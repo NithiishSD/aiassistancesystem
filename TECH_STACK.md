@@ -20,7 +20,7 @@ from scratch.
 
 | Role | Choice | Notes |
 |---|---|---|
-| Cloud chain | Gemini → Groq → NVIDIA NIM → OpenRouter → Cerebras | Free-tier first, per-task ordering via `TASK_PROVIDERS`. Bounded on purpose — unbounded fallback chains cause cascading retry storms when every provider rate-limits at once. |
+| Cloud chain | Gemini → Groq → NVIDIA NIM → OpenRouter → Cerebras, per-task order in `TASK_PROVIDERS`, quota-aware | Free-tier first, and bounded on purpose, because unbounded fallback chains cause retry storms. A provider that returns 429 is skipped until its `Retry-After` passes (default 60 s, cap 1 h). A 401/403 is skipped for 1 h. OpenRouter's verified 50/day free cap is a persisted daily budget, and it is never first in a chain. `provider_stats()` reports per-provider usage and cooldowns. |
 | Task profiles | `coding`, `evaluation`, `general_qa`, `fact_handling`, `process_reasoning`, `planning`, `research` | Model diversity is a *correctness* feature: the evaluator deliberately runs on a different model family than the code generator, so a model doesn't mark its own homework. |
 | Local fallback | Ollama + `llama3.1:8b` | **Scheduled for replacement by Qwen3 8B** (Roadmap D3) — same footprint, better instruction-following and JSON reliability, which matters because the local path does structured extraction. |
 | Local serving | Ollama | Keep. llama.cpp is only 10–20% faster for interactive chat; vLLM targets 10–1000 concurrent users on server GPUs — irrelevant for one person. |

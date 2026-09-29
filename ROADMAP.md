@@ -207,7 +207,8 @@ workflow files**. The user saw nothing and the model read everything.
       later Langfuse/Phoenix adoption a config change rather than a migration.
 - **Don't self-host Langfuse yet** — that means ClickHouse + Docker on a laptop.
 
-### C2. Provider accounting
+### C2. Provider accounting ✅ DONE 2026-09-29 (quota half)
+*Shipped as OpenSpec change `add-provider-quota-awareness`: 429/401 cooldowns, a persisted daily budget (openrouter 50/day), OpenRouter moved off the head of every chain, `provider_stats()`, and skips logged with reasons. Token and cost accounting move to C1 with the `gen_ai.*` fields.*
 Five free-tier providers with silent fallthrough: when Gemini hits quota there is no way
 to tell whether an answer came from Gemini or the local 8B. That's an invisible accuracy cliff.
 - [ ] Per-provider call/token counters; surface `last_provider` in responses.
