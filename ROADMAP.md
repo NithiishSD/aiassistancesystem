@@ -363,9 +363,10 @@ Ollama `format: "json"`): valid syntax, no schema.
 - Touches: `generate_chat()`, `_openai_compatible`, `_gemini`, `_local`, and the classifier's
   LLM fallback. Effort: 1–1.5 days. **No Instructor/Outlines** (see rejections).
 
-### F3. BM25 + reciprocal-rank-fusion hybrid search
-- [ ] An in-memory `bm25s` index beside Chroma, merged with dense results by RRF (~10
-      lines). This fixes exact-token misses such as course codes, roll numbers, and names.
+### F3. BM25 + reciprocal-rank-fusion hybrid search ✅ DONE 2026-09-29 (as a candidate union)
+*Shipped as OpenSpec change `add-hybrid-memory-search`. Measured before adoption: with near-duplicate distractor facts, dense top-20 recalled 21–22/24 while dense 20 ∪ BM25 10 recalled 23–24/24 (0 leaks, +3–7 ms). The cross-encoder rescores the whole union, so RRF was unnecessary (it measured no better). Remaining miss at scale: "where do I live" vs "User's Location: …" (no shared words, weak embedding match) — an F7 embedding-model question.*
+- [x] An in-memory `bm25s` index beside Chroma, merged with dense results by RRF (~10
+      lines). *(Shipped as a union reranked by the cross-encoder; see above.)* This fixes exact-token misses such as course codes, roll numbers, and names.
 - **Local ChromaDB cannot do this natively.** Its sparse/BM25 support is Cloud-only.
   Verified: local raises "Sparse vector indexing is not enabled in local" (chroma #6185).
 - RRF discards absolute scores, which is why F1's reranker threshold is required.

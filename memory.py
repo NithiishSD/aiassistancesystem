@@ -123,6 +123,7 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
                          if key not in reserved_keys})
 
     collection.add(documents=[text], ids=[item_id], metadatas=[metadata])
+    _invalidate_keyword_index(domain)
     log.info("memory_stored", extra={"domain": domain, "content_type": content_type,
                                        "user_id": user_id, "item_id": item_id})
     return item_id
@@ -196,6 +197,87 @@ def _third_person_query(query: str) -> str:
     for first_person, third_person in _THIRD_PERSON_RULES:
         text = text.replace(first_person, third_person)
     return text.strip()
+# ── Keyword candidates (ROADMAP F3) ─────────────────────────────────────────
+# The dense top-20 is all the reranker ever sees. In a store of near-duplicate
+# facts ("User's course code for X", "User's lab slot for X", ...) the embedding
+# crowds the right fact out of that window. A BM25 index adds candidates that
+# share distinctive words with the question; the cross-encoder then scores the
+# union, so no rank fusion is needed. Measured in evals/bench_hybrid_retrieval.py:
+# at 562 facts, dense 20 recalled 21-22/24 and dense 20 + keyword 10 recalled
+# 23-24/24, with no general-question leaks.
+KEYWORD_CANDIDATE_K = 10
+
+# (domain, user_id, content_type) -> (signature, ids, documents, metadatas, retriever)
+_keyword_indexes: dict[tuple, tuple] = {}
+_index_versions: dict[str, int] = {}
+_keyword_unavailable_logged = False
+
+
+def _invalidate_keyword_index(domain: str) -> None:
+    _index_versions[domain] = _index_versions.get(domain, 0) + 1
+
+
+def _where(user_id: str, content_type: str | None) -> dict:
+    if content_type:
+        return {"$and": [{"user_id": user_id}, {"content_type": content_type}]}
+    return {"user_id": user_id}
+
+
+def _keyword_index(domain: str, user_id: str, content_type: str | None):
+    """Cached BM25 index for one scope, or None when the scope is empty.
+
+    The signature includes collection.count() as well as the version bumped by
+    store()/delete_by_ids(), so writes made directly on the collection (e.g. by
+    memory_hygiene.clean_store) also invalidate it.
+    """
+    import bm25s
+
+    collection = _get_collection(domain)
+    signature = (_index_versions.get(domain, 0), collection.count())
+    key = (domain, user_id, content_type)
+    cached = _keyword_indexes.get(key)
+    if cached is not None and cached[0] == signature:
+        return cached
+
+    rows = collection.get(where=_where(user_id, content_type))
+    ids, documents = rows.get("ids") or [], rows.get("documents") or []
+    metadatas = rows.get("metadatas") or [{} for _ in ids]
+    if not ids:
+        _keyword_indexes[key] = (signature, [], [], [], None)
+        return _keyword_indexes[key]
+    retriever = bm25s.BM25()
+    retriever.index(bm25s.tokenize(documents, stopwords="en", show_progress=False), show_progress=False)
+    _keyword_indexes[key] = (signature, ids, documents, metadatas, retriever)
+    return _keyword_indexes[key]
+
+
+def _keyword_candidates(query: str, domain: str, user_id: str, content_type: str | None,
+                        k: int | None = None) -> list[dict]:
+    """Facts sharing distinctive words with the query (BM25 score > 0), shaped
+    like retrieve() items with distance=None. [] if keyword search is unavailable."""
+    global _keyword_unavailable_logged
+    k = KEYWORD_CANDIDATE_K if k is None else k
+    if k <= 0:
+        return []
+    try:
+        import bm25s
+
+        _, ids, documents, metadatas, retriever = _keyword_index(domain, user_id, content_type)
+        tokens = bm25s.tokenize([query or ""], stopwords="en", show_progress=False)
+        if retriever is None or not tokens.vocab:
+            return []
+        hits, scores = retriever.retrieve(tokens, k=min(k, len(ids)), show_progress=False)
+    except Exception as error:
+        if not _keyword_unavailable_logged:
+            log.info("memory_keyword_index_unavailable", extra={"domain": domain, "error": str(error)[:200]})
+            _keyword_unavailable_logged = True
+        return []
+    return [
+        {"text": documents[i], "metadata": metadatas[i], "id": ids[i], "distance": None}
+        for i, score in zip(hits[0], scores[0]) if score > 0
+    ]
+
+
 # Used only when the reranker is unavailable. Not 1.0: the correct answer to
 # "what college do I study at" measured 1.06 on the live store, while clearly
 # unrelated facts measured from 1.40 up.
@@ -220,8 +302,12 @@ def retrieve_relevant(query: str, domain: str = "personal", content_type: str = 
     import reranker
 
     threshold = RELEVANCE_MIN_SCORE if min_score is None else min_score
-    candidates = retrieve(query, domain=domain, user_id=user_id,
-                          content_type=content_type, top_k=max(candidate_k, top_k))
+    dense = retrieve(query, domain=domain, user_id=user_id,
+                     content_type=content_type, top_k=max(candidate_k, top_k))
+    seen = {item["id"] for item in dense}
+    keyword = [item for item in _keyword_candidates(query, domain, user_id, content_type)
+               if item["id"] not in seen]
+    candidates = dense + keyword
     if not candidates:
         return []
 
@@ -232,7 +318,8 @@ def retrieve_relevant(query: str, domain: str = "personal", content_type: str = 
             "domain": domain, "reason": "reranker_unavailable",
             "fallback_max_distance": FALLBACK_MAX_DISTANCE,
         })
-        kept = [item for item in sorted(candidates, key=lambda i: i.get("distance", 0.0))
+        # Keyword-only hits carry no distance, so this fallback stays dense-only.
+        kept = [item for item in sorted(dense, key=lambda i: i.get("distance", 0.0))
                 if item.get("distance", 0.0) <= FALLBACK_MAX_DISTANCE]
         return kept[:top_k]
 
@@ -242,7 +329,7 @@ def retrieve_relevant(query: str, domain: str = "personal", content_type: str = 
     )
     kept = [item for item in ranked if item["score"] >= threshold][:top_k]
     log.info("memory_retrieved_relevant", extra={
-        "domain": domain, "candidates": len(candidates), "kept": len(kept),
+        "domain": domain, "candidates": len(candidates), "keyword_added": len(keyword), "kept": len(kept),
         "threshold": threshold,
         "top_score": round(ranked[0]["score"], 4) if ranked else None,
     })
@@ -258,6 +345,7 @@ def delete_by_ids(ids: list[str], domain: str = "personal",
     owned_ids = collection.get(ids=ids, where={"user_id": user_id}).get("ids", [])
     if owned_ids:
         collection.delete(ids=owned_ids)
+        _invalidate_keyword_index(domain)
     log.info("memory_deleted", extra={"domain": domain, "user_id": user_id,
                                         "ids": owned_ids})
 

@@ -1,5 +1,5 @@
 {
-  "description": "Labelled retrieval fixture for memory.retrieve_relevant(). Facts are written to resemble the cleaned live store (2026-09-29). Seed of the ROADMAP A4 retrieval eval set: extend it with real misses as they happen. 'relevant' lists the fact ids that SHOULD be returned (at most 3, top_k=3); an empty list means no stored fact answers the query and nothing should be returned.",
+  "description": "Labelled retrieval fixture for memory.retrieve_relevant(). Facts are written to resemble the cleaned live store (2026-09-29). Seed of the ROADMAP A4 retrieval eval set: extend it with real misses as they happen. 'relevant' lists the fact ids that SHOULD be returned (at most 3, top_k=3); an empty list means no stored fact answers the query and nothing should be returned. Exact-token facts f31-f37 (codes, IDs, handles; fictional) were added with ROADMAP F3 (hybrid keyword + dense candidates).",
   "facts": {
     "f01": "User's name: Nithiish",
     "f02": "User's college: PSG College of Technology",
@@ -30,7 +30,14 @@
     "f27": "User's laptop RAM: 16 GB",
     "f28": "User's preferred language for DSA practice: C++",
     "f29": "User's competitive programming site: Codeforces",
-    "f30": "User's internship goal: summer internship in backend development"
+    "f30": "User's internship goal: summer internship in backend development",
+    "f31": "User's course code for Database Systems: 23XT51",
+    "f32": "User's course code for Operating Systems: 23XT52",
+    "f33": "User's roll number: 22PT14",
+    "f34": "User's hostel room: C-217",
+    "f35": "User's lab partner: Arjun K",
+    "f36": "User's GitHub username: nsd-dev42",
+    "f37": "User's bus route: 17B"
   },
   "queries": [
     {"q": "what college do I study at", "relevant": ["f02"]},
@@ -48,6 +55,15 @@
     {"q": "what degree am I doing", "relevant": ["f24"]},
     {"q": "where do I practice competitive programming", "relevant": ["f29"]},
     {"q": "what editor do I code in", "relevant": ["f21"]},
+    {"q": "which course is 23XT51", "relevant": ["f31"]},
+    {"q": "what subject has the code 23XT52", "relevant": ["f32"]},
+    {"q": "what is my roll number", "relevant": ["f33"]},
+    {"q": "is 22PT14 my roll number", "relevant": ["f33"]},
+    {"q": "which room is C-217", "relevant": ["f34"]},
+    {"q": "who is Arjun", "relevant": ["f35"]},
+    {"q": "what's my github handle", "relevant": ["f36"]},
+    {"q": "which bus is 17B", "relevant": ["f37"]},
+    {"q": "course code of Database Systems", "relevant": ["f31"]},
     {"q": "what is a binary search tree", "relevant": []},
     {"q": "who invented Linux", "relevant": []},
     {"q": "explain recursion to me", "relevant": []},

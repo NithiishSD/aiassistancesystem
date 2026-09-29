@@ -210,6 +210,7 @@ def clean_store(domain: str = "personal", dry_run: bool = True,
                 ids=[item_id for item_id, _, _ in report.repaired],
                 documents=[after for _, _, after in report.repaired],
             )
+            memory._invalidate_keyword_index(domain)  # in-place rewrite keeps the count
         log.info("memory_cleanup_applied", extra={
             "domain": domain, "deleted": len(to_delete), "repaired": len(report.repaired),
         })

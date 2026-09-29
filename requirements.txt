@@ -7,6 +7,8 @@ groq==0.11.0
 
 # --- Vector memory (used from Phase 5 onward, installed now to avoid re-setup) ---
 chromadb==0.5.20
+# Keyword (BM25) candidates beside Chroma's dense search (ROADMAP F3); runtime dep: numpy only
+bm25s==0.3.11
 # Chroma 0.5.20 calls the legacy three-argument PostHog API.
 posthog==3.5.0
 
