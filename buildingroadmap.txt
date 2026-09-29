@@ -1,3 +1,7 @@
+NOTE (2026-09-29): This file is a historical build log, not the current plan.
+The canonical roadmap is ROADMAP.md. See also TECH_STACK.md and COMPLIANCE.md.
+-------------------------------------------------------------------------------
+
 Phase 1 — Environment
 Conda environment (`zedek-env`), Ollama running two local models — Qwen2.5-Coder-7B and Llama3.1-8B — confirmed responding, GPU/VRAM visibility confirmed via pynvml.
 2

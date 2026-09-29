@@ -1,6 +1,35 @@
-# Task: Complete remaining roadmap (Items 9–14)
+# Current task: Production-hardening pass (ROADMAP.md Phases A–E)
 
-Working through every remaining roadmap item in order, each with the same
+Items 1–14 are complete (history below). The active plan is now **[`ROADMAP.md`](ROADMAP.md)**,
+produced from an external research pass + live system audit on 2026-09-29.
+
+## Done this pass (2026-09-29)
+- [x] Researched 2026 practice: agent architectures, security/compliance, production engineering
+- [x] Audited the live memory store — ~half of 135 stored facts were junk
+- [x] **A1:** `memory_hygiene.py` — validation gate wired into `memory.store()` + cleanup sweep with in-place repair (43 tests)
+- [x] Fixed `requirements.txt` drift — `cryptography`, `httpx`, `playwright`, and the audio stack were all missing
+- [x] Wrote `ROADMAP.md`, `TECH_STACK.md`, `COMPLIANCE.md`; amended the MCP guidance in `zedek_context.md`
+
+## Next up, in order
+- [ ] **Apply the memory cleanup to the live store** — needs your go-ahead (deletes 36 rows, repairs 37).
+      Command: `python memory_hygiene.py --apply`
+- [ ] **A3** — relevance threshold in `answer_general_question()` (~3 lines)
+- [ ] **B1** — quarantine web-page content from the web agent's planner (dual-LLM)
+- [ ] **A4** — routing eval harness: `evals/routing_golden.csv` + pytest/sklearn confusion matrix
+- [ ] **B2** — treat MCP descriptions as untrusted; mandatory pinned `default_tier`
+- [ ] **C1/C2** — `trace_id` per turn, `gen_ai.*` log fields, per-provider counters
+- [ ] **D3** — swap local fallback to Qwen3 8B, re-run evals
+- [ ] **D1/D2** — proactive daily digest; token streaming
+
+Still open from before:
+- [ ] Wake-word loop against LIVE SPEECH — needs you to run it and talk
+- [ ] Calibrate the voice-print threshold (0.75) against your real voice
+
+---
+
+# History: Complete remaining roadmap (Items 9–14) ✅
+
+Worked through every remaining roadmap item in order, each with the same
 rigor as Item 8: plan → implement → test → run full suite → document in
 `zedek_context.md`.
 

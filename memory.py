@@ -21,6 +21,7 @@ import time
 import chromadb
 from chromadb.config import Settings
 from semantic_router.encoders import HuggingFaceEncoder
+import memory_hygiene
 from zedek_logger import get_logger
 
 log = get_logger("memory")
@@ -86,11 +87,28 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
           user_id: str = DEFAULT_USER_ID, extra_metadata: dict | None = None) -> str:
     """
     Stores a piece of text (a fact or a conversation turn) in memory.
-    Returns the generated item ID.
+    Returns the generated item ID, or "" when the item was rejected.
+
+    Facts pass through memory_hygiene.normalize_fact() first. An audit of this
+    store found ~half of its 135 "facts" were LLM preamble lines, unstripped
+    markdown bullets, duplicates, or null values — all of which semantic search
+    happily returned as though they were ground truth. Rejecting them here is
+    what stops that recurring; memory_hygiene.clean_store() handles the rows
+    that were written before this gate existed.
     """
     _validate_domain(domain)
     _validate_user_id(user_id)
     _validate_content_type(content_type)
+
+    if content_type == "fact":
+        normalized, reason = memory_hygiene.normalize_fact(text)
+        if normalized is None:
+            log.info("memory_store_rejected", extra={
+                "domain": domain, "reason": reason, "text": (text or "")[:120],
+            })
+            return ""
+        text = normalized
+
     collection = _get_collection(domain)
     item_id = str(uuid.uuid4())
 

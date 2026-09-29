@@ -33,3 +33,31 @@ python-json-logger==2.0.7
 # --- Model Context Protocol (MCP) Client ---
 mcp>=2.0.0
 jsonschema>=4.0.0
+
+# --- HTTP client used by the MCP servers (online/github/weather/scholar) ---
+httpx==0.27.2
+
+# --- Browser automation (web agent, mcp_playwright_server) ---
+# After install, also run: playwright install chromium
+playwright==1.62.0
+
+# --- Security module: encrypted vault + password gate ---
+cryptography==50.0.0
+
+# --- Numeric stack ---
+# Pinned deliberately. An audio install once upgraded this 1.x -> 2.5.3 as an
+# unrequested transitive change. It happened to be compatible, but a numeric-stack
+# version should be a decision, not an accident.
+numpy==2.5.3
+
+# --- Voice: speaker verification + wake-word (security_module, wake_word) ---
+# Needs the system library: sudo apt install libportaudio2
+sounddevice==0.5.6
+Resemblyzer==0.1.4
+# webrtcvad imports pkg_resources, which setuptools>=81 is removing. Pinned so a
+# setuptools upgrade can't silently break voice verification.
+webrtcvad==2.0.10
+setuptools==83.0.0
+# Offline speech-to-text. Model is NOT installed by pip — download
+# vosk-model-small-en-us-0.15 into models/ (see setup.sh).
+vosk==0.3.45

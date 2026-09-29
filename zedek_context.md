@@ -726,10 +726,84 @@ instruction.
   An MCP tool that deletes files is still a destructive action, regardless of
   how it was discovered. The MCP client must translate tool metadata into
   tier-gate-compatible risk classifications before execution.
+  - **Amended 2026-09-29: tool descriptions are UNTRUSTED input.** The original
+    guidance above led to deriving risk escalation *from the description text*,
+    which fails open — a server that describes a writing tool as "reads data"
+    stays Tier 1. The same descriptions are also interpolated into an LLM prompt
+    in `_select_mcp_tool()`, a documented tool-poisoning surface (Unit 42 measured
+    a 78.3% attack success rate with five MCP servers on one agent; Zedek runs
+    seven). Risk must come from a **pinned per-server `default_tier` treated as a
+    floor**; description parsing may only ever *raise* a tier, never be the sole
+    source of it. See ROADMAP B2.
+- **Never let an LLM that chooses actions read untrusted content directly.**
+  Web pages, fetched URLs, and tool descriptions go through a tool-less
+  quarantine step that returns typed fields; the privileged planner sees only
+  those fields. See ROADMAP B1.
 
 > Important: the ambiguity-handling, gratitude guard, and tone adaptation pass
 > is complete and should be treated as finished work. Do not reopen or repeat
 > these fixes unless a new regression specifically reappears during testing.
+
+## 2026-09-29 — External research pass + live audit
+
+Three parallel research streams (agent architectures, security/compliance,
+production engineering) plus a direct audit of the running system. The canonical
+outputs now live in dedicated files — **read these before planning new work**:
+
+- [`ROADMAP.md`](ROADMAP.md) — the plan. Supersedes `buildingroadmap.txt` (kept as history).
+- [`TECH_STACK.md`](TECH_STACK.md) — every component with *why it was chosen over the alternative*.
+- [`COMPLIANCE.md`](COMPLIANCE.md) — DPDP / EU AI Act position and the tripwires that change it.
+
+### What the audit found in the live system
+
+**Memory was badly corrupted.** Of 135 stored facts, roughly half were not facts:
+22 were the LLM's own preamble line (`"Here are the extracted facts:"`), 40 had
+unstripped markdown bullets, 19 were duplicates (`User's name: Nithiish` appeared
+four times), and several held null or placeholder values (`User's college: <new value>`,
+`User's educational institution: not stated`). Semantic search returns its top-k
+regardless of quality, so this junk was reaching the model as ground truth.
+Most of it appears to be legacy — written by earlier code before the current
+`startswith("User's")` filters existed — which is exactly why fixing the writer
+alone was never going to be enough.
+- **Fixed:** `memory_hygiene.py` gates every fact on the way into `memory.store()`,
+  and `clean_store()` sweeps existing rows (deletes junk, **repairs** salvageable
+  rows in place). 43 tests, every rejection case drawn from observed corruption.
+- **Not yet applied to the live store** — the cleanup deletes the user's data, so it
+  waits for his go-ahead. Dry run: 36 rows to delete, 37 to repair.
+
+**`requirements.txt` had drifted.** It omitted `cryptography`, `httpx`, `playwright`,
+and the entire audio stack. A fresh install would have broken the vault import.
+Fixed; all pinned to installed versions.
+
+### What the research confirmed Zedek already gets right
+
+Worth recording, because it argues against churn:
+- **Hand-rolled orchestration is correct for this profile.** The 2026 trend is away
+  from frameworks for single-user interactive assistants; LangGraph's real value is
+  durable multi-day execution, which Zedek doesn't need, at a 30–80ms/call tax.
+- **The hybrid router is the recommended pattern**, not a stopgap — ~65× cheaper and
+  ~50× faster than pure-LLM routing.
+- **Security posture is ahead of comparable open-source assistants.** OpenClaw (~300k
+  stars, the closest comparable) shipped without encrypted credential storage and had a
+  third-party skill found exfiltrating data. Zedek has an encrypted vault, explicit
+  allowlists, and a tier gate that model judgment cannot lower.
+- **Injected, deny-by-default confirmation** in the web agent is exactly the control
+  that browser agents which failed in public (e.g. one letting through 97 of 103
+  phishing attempts) lacked.
+
+### What the research found genuinely behind
+
+In priority order (details and rationale in ROADMAP.md):
+1. **Prompt-injection hole in `web_agent`** — the planner reads raw page text and then
+   chooses the next tool. Verified in code (`web_agent.py:150`). → B1
+2. **MCP descriptions trusted** in the selection prompt and the tier gate. Verified in
+   code (`orchestrator.py:521`, `tier_gate.py:151`). → B2
+3. **No routing evaluation** despite routing being the historical failure point. → A4
+4. **No bi-temporal facts** — no way to represent "this stopped being true", which is
+   the structural cause of the contradictory-fact bug. → A2
+5. **No tracing or provider accounting** across a five-provider fallback chain. → C1, C2
+6. **`llama3.1:8b` is a dated local fallback**; Qwen3 8B is the same footprint and
+   better at the structured extraction the fallback path does. → D3
 
 ## User's stated priorities, in their own words (for judgment calls)
 
