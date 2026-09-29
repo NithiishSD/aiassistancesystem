@@ -64,6 +64,11 @@ says less. Everything here is about making its outputs trustworthy.*
 - [ ] Optional: `python memory_hygiene.py --apply --drop-conversations` removes 36 raw
       conversation turns persisted before the tiered-memory redesign.
 
+- [ ] **Reject hedged or speculative facts** (found while verifying F1). The store still holds LLM guesses such as
+      "User's Current Studies: Data Structures (*presumably* a course at PSG…)" and "Operating System: *likely* a
+      Linux-based system". The first outranked the real college fact on the live store. Add hedge words (presumably,
+      likely, probably, possibly, maybe) to `normalize_fact()`'s rejections and sweep the existing rows.
+
 ### A2. Bi-temporal facts — the structural fix
 The contradictory pair in the store (`"...exam next week"` + `"...exam next week: false"`)
 is not a coding slip; there is no representation for *"this fact stopped being true."*
@@ -73,10 +78,10 @@ is not a coding slip; there is no representation for *"this fact stopped being t
 - **Adopt the schema, not the dependency.** Zep/Graphiti want Neo4j and are tuned for
   millions of cold graphs; this is one user. ~50 lines here kills the whole bug class.
 
-### A3. Relevance threshold everywhere
+### A3. Relevance threshold everywhere ✅ DONE via F1
 `research_agent` now filters memory at distance 1.0 (measured: real matches ~0.5–0.7,
 junk ~1.4–2.0). `answer_general_question()` still injects top-3 unconditionally.
-- [ ] Apply the same threshold there. ~3 lines. Do this now as a stopgap.
+- [x] ~~Apply the same threshold there.~~ Not done as written: a fixed 1.0 cutoff would have dropped the correct college fact (1.06). General Q&A now uses F1's relevance gate instead.
 - **Superseded long-term by F1.** A raw L2 cutoff shifts with query length and phrasing.
   The reranker score from F1 is the proper relevance gate and replaces the 1.0 cutoff.
 
@@ -284,7 +289,11 @@ run on CPU.*
 on 10k+ document corpora, reported by vendors, or measured on GPUs. Keep a change only if
 it improves Zedek's own eval set.
 
-### F1. Cross-encoder reranker ⭐ best value per hour
+### F1. Cross-encoder reranker ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `2026-09-29-add-memory-reranker`; main spec in `openspec/specs/memory-retrieval/`.*
+*Measured: median 64 ms for 20 candidates on CPU. On the labelled fixture: recall 15/15 vs 8/15 for the old gate, and 0/5 general-question leaks.
+Needed one addition beyond the plan: first-person queries are rewritten to third person before scoring, because without it no single threshold met the spec.*
+
 - [ ] Retrieve 15–20 candidates instead of 3, rerank with a small cross-encoder
       (FlashRank `ms-marco-MiniLM-L-12-v2`, ~4 MB, or `bge-reranker-base`), keep the top 3.
 - [ ] Replace the L2 ≤ 1.0 cutoff with a **reranker-score threshold** tuned on the eval set.
