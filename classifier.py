@@ -795,7 +795,7 @@ def query_llm_with_tools(text: str) -> dict:
         "You are a strict intent-classification assistant for an AI personal assistant "
         "called Zedek. Given a user message, pick EXACTLY ONE tool from the list below "
         "that best describes the user's intent. Respond ONLY with a JSON object in this "
-        'exact format: {"function_name": "<tool name>", "arguments": {}}.\n'
+        'exact format: {"function_name": "<tool name>"}.\n'
         "Do not add explanation. Do not add markdown. Output valid JSON only.\n\n"
         f"Available tools:\n{tool_schema_str}"
     )
@@ -806,11 +806,10 @@ def query_llm_with_tools(text: str) -> dict:
     ]
 
     try:
-        result = llm_provider.generate_chat(messages, json_mode=True, task="general_qa")
-        raw = result.get("answer", "")
-        parsed = json.loads(raw)
-        func_name = parsed.get("function_name", "").strip()
-        llm_args = parsed.get("arguments", {})
+        # Single-field enum schema: the reply can only name a known intent (ROADMAP F2).
+        from llm_schemas import intent_choice_model
+        result = llm_provider.generate_structured(messages, intent_choice_model(), task="general_qa")
+        func_name = result["data"].function_name
 
         # Guard against LLM misclassifying "build website/app" into open_application
         if func_name == "open_application":
@@ -833,7 +832,7 @@ def query_llm_with_tools(text: str) -> dict:
             "confidence": "high",
             "score": 1.0,
             "via_llm": True,
-            "llm_args": llm_args if isinstance(llm_args, dict) else {},
+            "llm_args": {},
         }
 
     except (json.JSONDecodeError, KeyError, Exception) as exc:

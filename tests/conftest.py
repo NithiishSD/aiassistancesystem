@@ -42,3 +42,33 @@ def pytest_unconfigure(config):
         os.environ.pop("ZEDEK_MCP_LOCK_PATH", None)
     else:
         os.environ["ZEDEK_MCP_LOCK_PATH"] = _previous_lock_path
+
+
+# Tests must never reach a real language model: that spends free-tier quota and
+# makes results depend on the network. Unit tests mock these calls; a test that
+# forgets fails here instead of silently calling out.
+_LLM_HOSTS = ("generativelanguage.googleapis.com", "api.groq.com", "integrate.api.nvidia.com",
+              "openrouter.ai", "api.cerebras.ai")
+
+
+class RealLLMCallInTest(RuntimeError):
+    pass
+
+
+@pytest.fixture(autouse=True)
+def _block_real_llm_calls(monkeypatch):
+    import ollama
+    import requests
+
+    real_post = requests.post
+
+    def guarded_post(url, *args, **kwargs):
+        if any(host in str(url) for host in _LLM_HOSTS):
+            raise RealLLMCallInTest(f"test tried to call a real LLM provider: {url}")
+        return real_post(url, *args, **kwargs)
+
+    def blocked_chat(*args, **kwargs):
+        raise RealLLMCallInTest("test tried to call the real local model (ollama.chat)")
+
+    monkeypatch.setattr(requests, "post", guarded_post)
+    monkeypatch.setattr(ollama, "chat", blocked_chat)

@@ -59,6 +59,7 @@ from scratch.
 | Wake-word | `wake_word.py` | **Q&A-only**; no path from a spoken utterance to `execute()`. |
 | Untrusted text | `text_sanitizer.py` | Strips zero-width and bidi-control characters before any model reads web pages, research sources, or MCP tool results; removes instruction-shaped sentences from MCP tool descriptions (B2/B6). |
 | MCP trust | `mcp_client.py` pinning | Tool definitions pinned by SHA-256 on first use (`data/mcp_tool_lock.json`); a changed definition disables that tool until reviewed (`python mcp_client.py --review`/`--accept`). Every server must declare `default_tier`; missing fails closed to Tier 2. |
+| Structured output | `llm_schemas.py` Pydantic models + `llm_provider.generate_structured()` | Native schema mode per provider (Gemini `responseJsonSchema`, Groq/Cerebras strict `json_schema`, NIM `guided_json`, Ollama `format=<schema>`; JSON mode + schema-in-prompt elsewhere), downgrade once on HTTP 400, validate, one re-ask, then next provider. No Instructor/Outlines: one adapter covers it without SDK clients. |
 | Security | `security_module.py` | Vault, password gate, rotating single-use confirmation word, voice-print. |
 
 ## Planned additions (ROADMAP Phase F)
@@ -69,7 +70,6 @@ before it's adopted.
 | Concern | Planned choice | Why this, not the alternative |
 |---|---|---|
 | Keyword search | `bm25s` in-memory index + reciprocal rank fusion beside ChromaDB | **Local ChromaDB has no sparse/BM25 search**. That's Cloud-only (verified, chroma #6185). bm25s is 100–500× faster than rank_bm25. |
-| Structured output | Pydantic models + hand-written per-provider schema adapter + one re-ask | Every provider in the chain has a native schema mode. Instructor would pull in SDK clients, against the no-LiteLLM decision, and Outlines adds nothing over Ollama's `format`. |
 | Caching | Static-first prompt layout (for provider prefix caches) + SQLite exact-match cache for deterministic sub-tasks | Semantic caches hit 5–15% on conversation and serve stale personal answers. |
 | Memory embeddings | `snowflake-arctic-embed-s` or `bge-small-en-v1.5` (both 384-dim) | Same size as MiniLM, better retrieval (self-reported). The eval set decides. |
 | Router embeddings (candidate) | `model2vec` `potion-base-8M` | Up to 500× faster on CPU. Router only, never memory. Accepted only if routing accuracy holds. |

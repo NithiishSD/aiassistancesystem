@@ -10,11 +10,12 @@ Covers:
 - Full research() pipeline producing a structured ResearchReport.
 """
 
-import json
 from unittest.mock import patch
 
 import pytest
 
+import llm_provider
+import llm_schemas
 import research_agent
 from research_agent import ResearchAgent, ResearchReport, Source
 
@@ -98,26 +99,38 @@ class TestToolCalling:
         assert result is None
 
 
+def _planned(queries, source="groq"):
+    return {"data": llm_schemas.ResearchQueries(queries=queries), "answer": "", "source": source}
+
+
 class TestPlanQueries:
     def setup_method(self):
         self.agent = ResearchAgent()
 
     def test_parses_llm_queries(self):
-        mock = {"answer": json.dumps({"queries": ["transformer attention", "self attention nlp"]}), "source": "gemini"}
-        with patch("research_agent.llm_provider.generate_chat", return_value=mock):
+        mock = _planned(["transformer attention", "self attention nlp"], source="gemini")
+        with patch("research_agent.llm_provider.generate_structured", return_value=mock) as llm:
             queries = self.agent.plan_queries("how does attention work in transformers")
         assert queries == ["transformer attention", "self attention nlp"]
+        assert llm.call_args.args[1] is llm_schemas.ResearchQueries
 
     def test_falls_back_to_raw_question_on_failure(self):
-        with patch("research_agent.llm_provider.generate_chat", side_effect=RuntimeError("down")):
+        with patch("research_agent.llm_provider.generate_structured",
+                   side_effect=llm_provider.StructuredOutputError("no valid reply")):
             queries = self.agent.plan_queries("how does attention work")
         assert queries == ["how does attention work"]
 
-    def test_caps_at_three_queries(self):
-        mock = {"answer": json.dumps({"queries": ["a", "b", "c", "d", "e"]}), "source": "groq"}
-        with patch("research_agent.llm_provider.generate_chat", return_value=mock):
+    def test_schema_caps_at_three_queries(self):
+        assert llm_schemas.json_schema_for(llm_schemas.ResearchQueries)["properties"]["queries"]["maxItems"] == 3
+        mock = {"data": llm_schemas.ResearchQueries.model_construct(queries=["a", "b", "c", "d", "e"]),
+                "answer": "", "source": "groq"}
+        with patch("research_agent.llm_provider.generate_structured", return_value=mock):
             queries = self.agent.plan_queries("something")
         assert len(queries) == 3
+
+    def test_blank_queries_fall_back(self):
+        with patch("research_agent.llm_provider.generate_structured", return_value=_planned(["  "])):
+            assert self.agent.plan_queries("what is x") == ["what is x"]
 
 
 class TestSynthesize:
@@ -172,11 +185,11 @@ class TestGatherAndPipeline:
         assert len(sources) == 2
 
     def test_research_returns_structured_report(self):
-        mock_plan = {"answer": json.dumps({"queries": ["python language"]}), "source": "groq"}
         mock_synth = {"answer": "Python is a language [S1].", "source": "gemini"}
         with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch.object(ResearchAgent, "_call_tool", return_value="Python is a programming language."), \
-             patch("research_agent.llm_provider.generate_chat", side_effect=[mock_plan, mock_synth]):
+             patch("research_agent.llm_provider.generate_structured", return_value=_planned(["python language"])), \
+             patch("research_agent.llm_provider.generate_chat", return_value=mock_synth):
             report = self.agent.research("what is python")
 
         assert isinstance(report, ResearchReport)
@@ -185,14 +198,15 @@ class TestGatherAndPipeline:
         assert "[S1]" in report.answer
 
     def test_research_with_no_sources_is_marked_ungrounded(self):
-        mock_plan = {"answer": json.dumps({"queries": ["x"]}), "source": "groq"}
         with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch.object(ResearchAgent, "_call_tool", return_value=None), \
-             patch("research_agent.llm_provider.generate_chat", return_value=mock_plan):
+             patch("research_agent.llm_provider.generate_structured", return_value=_planned(["x"])), \
+             patch("research_agent.llm_provider.generate_chat") as synth:
             report = self.agent.research("some obscure question")
 
         assert report.grounded is False
         assert report.notes
+        synth.assert_not_called()
 
     def test_empty_question_short_circuits(self):
         report = self.agent.research("   ")
@@ -276,13 +290,14 @@ class TestEmptyResultFiltering:
         assert result == content
 
     def test_empty_results_leave_report_ungrounded(self):
-        mock_plan = {"answer": json.dumps({"queries": ["zzz"]}), "source": "groq"}
         with patch("research_agent.memory.retrieve_relevant", return_value=[]), \
              patch("research_agent.mcp_client.get_tool_registry", return_value=_registry(*research_agent.RESEARCH_TOOL_ALLOWLIST)), \
              patch("research_agent.gate", return_value={"action": "allow", "message": ""}), \
              patch("research_agent.mcp_client.call_mcp_tool", return_value={"result": "No Wikipedia articles found for: 'zzz'.", "error": None}), \
-             patch("research_agent.llm_provider.generate_chat", return_value=mock_plan):
+             patch("research_agent.llm_provider.generate_structured", return_value=_planned(["zzz"])), \
+             patch("research_agent.llm_provider.generate_chat") as synth:
             report = self.agent.research("some nonsense query")
+        synth.assert_not_called()
         assert report.grounded is False
         assert report.sources == []
 

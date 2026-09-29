@@ -24,6 +24,7 @@ from tier_gate import gate
 import memory
 import classifier
 import llm_provider
+import llm_schemas
 from coding_agent import CodingSpecialist
 import mcp_client
 import task_planner
@@ -594,10 +595,13 @@ Request: {user_input}
 
 Respond ONLY with a JSON object of argument names to values. If no arguments are mentioned, respond with {{}}."""
     try:
+        # Constrain decoding to the tool's own input schema (ROADMAP F2);
+        # _validate_mcp_args still checks the result before any call.
+        output_format = schema if schema.get("type") == "object" and properties else "json"
         response = ollama.chat(
             model=ROUTING_MODEL,
             messages=[{"role": "user", "content": arg_prompt}],
-            format="json",
+            format=output_format,
         )
         parsed = json.loads(response["message"]["content"])
         if isinstance(parsed, dict):
@@ -659,21 +663,18 @@ Determine which candidate fact (if any) this statement contradicts, negates, or 
 - If the user wants to remove/delete the fact because it is false or mistaken (without replacing it), provide the index and set "corrected_fact": null.
 - If none of the candidates match, set both to null.
 
-Respond ONLY with valid JSON:
-{{"index": <number 0-{len(candidates)-1} or null>, "corrected_fact": "User's <attribute>: <new value>" or null}}"""
+Respond with "index" (a number 0-{len(candidates)-1}, or null) and "corrected_fact"
+("User's <attribute>: <new value>", or null)."""
 
-    llm_result = llm_provider.generate_chat(
-        [{"role": "user", "content": prompt}],
-        json_mode=True,
-        task="fact_handling",
-    )
     try:
-        result = json.loads(llm_result["answer"])
-    except (json.JSONDecodeError, TypeError):
-        result = {"index": None, "corrected_fact": None}
-
-    index = result.get("index")
-    corrected_fact = result.get("corrected_fact")
+        llm_result = llm_provider.generate_structured(
+            [{"role": "user", "content": prompt}], llm_schemas.FactCorrection, task="fact_handling",
+        )
+        index = llm_result["data"].index
+        corrected_fact = llm_result["data"].corrected_fact
+    except llm_provider.StructuredOutputError as e:
+        log.info("correction_extraction_failed", extra={"error": str(e)})
+        index, corrected_fact = None, None
 
     if index is None or not isinstance(index, int) or index < 0 or index >= len(candidates):
         log.info("correction_no_confident_match", extra={"raw_text": raw_text, "candidates": candidate_list})
@@ -719,45 +720,43 @@ def canonicalize_fact(raw_text: str) -> list[str]:
     Returns a list of standardized fact strings ["User's <attr>: <val>", ...],
     or [] if no real facts could be extracted.
     """
-    prompt = f"""Rewrite the following user statement into clean, standardized facts.
-If the statement contains multiple distinct facts, write EACH fact on its own line.
-Use this exact format for every line:
-
-User's <attribute>: <value>
+    prompt = f"""Rewrite the following user statement into clean, standardized facts about the user.
+Each fact is an attribute (a short lowercase noun phrase) and its value.
+If the statement contains multiple distinct facts, return each one separately.
 
 Examples:
 "okay so basically i study at psg college of technology" ->
-User's college: PSG College of Technology
+{{"facts": [{{"attribute": "college", "value": "PSG College of Technology"}}]}}
 
 "see software system is the program provided by the amcs department and ml java are the subjects i study" ->
-User's program: Software Systems
-User's department: AMCS
-User's subjects: Machine Learning, Java
+{{"facts": [{{"attribute": "program", "value": "Software Systems"}},
+           {{"attribute": "department", "value": "AMCS"}},
+           {{"attribute": "subjects", "value": "Machine Learning, Java"}}]}}
 
 "i really like python a lot" ->
-User's favorite programming language: Python
+{{"facts": [{{"attribute": "favorite programming language", "value": "Python"}}]}}
 
 If the statement does NOT contain any real, concrete fact about the user (e.g. it is a question,
-a greeting, or routine banter), respond with exactly: NO_FACT
+a greeting, or routine banter), return {{"facts": []}}.
 
-Statement: {raw_text}
+Statement: {raw_text}"""
 
-Respond with ONLY the standardized fact line(s), or NO_FACT, nothing else."""
-
-    result = llm_provider.generate_chat(
-        [{"role": "user", "content": prompt}],
-        task="fact_handling",
-    )
-    raw_answer = result["answer"].strip()
+    try:
+        result = llm_provider.generate_structured(
+            [{"role": "user", "content": prompt}], llm_schemas.FactList, task="fact_handling",
+        )
+    except llm_provider.StructuredOutputError as e:
+        log.info("fact_canonicalization_failed", extra={"error": str(e)})
+        return []
     rejected_markers = ["no_fact", "unknown", "n/a", "not specified", "not provided", "not given"]
 
     facts: list[str] = []
-    for line in raw_answer.splitlines():
-        line = line.strip().strip('"').strip("'")
-        if not line or any(marker in line.lower() for marker in rejected_markers):
+    for fact in result["data"].facts:
+        attribute = fact.attribute.strip().strip('"\'')
+        value = fact.value.strip().strip('"\'')
+        if not attribute or not value or any(marker in value.lower() for marker in rejected_markers):
             continue
-        if line.startswith("User's ") and ":" in line:
-            facts.append(line)
+        facts.append(f"User's {attribute}: {value}")
 
     log.info("fact_canonicalized", extra={"raw": raw_text, "facts_extracted": len(facts), "facts": facts})
     return facts
@@ -884,12 +883,10 @@ Return ONLY valid JSON:
 {{"action": "log", "topic": "graphs", "result": "solved", "problem": "", "difficulty": "", "minutes": 0}}"""
 
     try:
-        result = llm_provider.generate_chat(
-            [{"role": "user", "content": prompt}], json_mode=True, task="fact_handling",
+        result = llm_provider.generate_structured(
+            [{"role": "user", "content": prompt}], llm_schemas.AcademicIntent, task="fact_handling",
         )
-        parsed = json.loads(result["answer"])
-        if isinstance(parsed, dict) and parsed.get("action") in ("log", "review", "summary"):
-            return parsed
+        return result["data"].model_dump()
     except Exception as e:
         log.info("academic_intent_extraction_failed", extra={"error": str(e)})
 

@@ -19,12 +19,12 @@ Safety boundaries:
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import llm_provider
+import llm_schemas
 import mcp_client
 import memory
 from text_sanitizer import strip_invisible
@@ -151,11 +151,10 @@ Rules:
 Return ONLY valid JSON: {{"queries": ["query one", "query two"]}}"""
 
         try:
-            result = llm_provider.generate_chat(
-                [{"role": "user", "content": prompt}], json_mode=True, task="research",
+            result = llm_provider.generate_structured(
+                [{"role": "user", "content": prompt}], llm_schemas.ResearchQueries, task="research",
             )
-            parsed = json.loads(result["answer"])
-            queries = [q.strip() for q in parsed.get("queries", []) if isinstance(q, str) and q.strip()]
+            queries = [q.strip() for q in result["data"].queries if q.strip()]
             if queries:
                 log.info("research_queries_planned", extra={
                     "question": question[:200], "count": len(queries), "source": result.get("source"),

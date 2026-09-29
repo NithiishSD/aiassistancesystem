@@ -231,6 +231,19 @@ to tell whether an answer came from Gemini or the local 8B. That's an invisible 
 
 ---
 
+### C3. Provider model resolution (found by the F2 live check, 2026-09-29)
+Every candidate list had rotted: none of Groq's llama candidates exist any more, so
+`resolve_groq_model()` fell back to the catalog's *first* entry, which can be Whisper, a
+prompt-guard classifier or a TTS model. OpenRouter likewise picked an arbitrary `:free`
+model, and the configured Cerebras and NVIDIA models return 404.
+- [ ] Refresh the candidate lists from the live catalogs.
+- [ ] Never fall back to an arbitrary catalog entry: filter out non-chat models (speech,
+      guard/safeguard, embedding, TTS), and prefer "no model" (skip the provider) over a
+      wrong one.
+- [ ] A 404 on the chat endpoint marks that model dead for the session and re-resolves.
+
+---
+
 ## Phase D — Making it feel like an assistant
 
 ### D1. Proactivity — the biggest perceived-intelligence win
@@ -331,17 +344,18 @@ Needed one addition beyond the plan: first-person queries are rewritten to third
 - Touches: `memory.retrieve()`, the memory gate in `research_agent.py`, the fact lookups
   in `orchestrator.py`. Effort: 0.5–1 day.
 
-### F2. Schema-constrained JSON on every provider
+### F2. Schema-constrained JSON on every provider ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `add-structured-output` (main spec `openspec/specs/structured-output/`). `llm_provider.generate_structured(messages, Model)` returns validated data; converted: intent fallback (single-field enum), fact canonicalization (`{facts:[{attribute,value}]}` replaces line parsing), fact correction, research query planning, academic intent, and MCP argument extraction (Ollama constrained by the tool's own input schema). Live check: Groq (strict json_schema on gpt-oss) and local llama3.1:8b produce valid output; the other providers' configured models had rotted — see the provider-model follow-up below.*
 Today `llm_provider.py` only asks for "some JSON" (`json_object`, `responseMimeType`,
 Ollama `format: "json"`): valid syntax, no schema.
-- [ ] A Pydantic model per structured task (arg extraction, fact canonicalization,
+- [x] A Pydantic model per structured task (arg extraction, fact canonicalization,
       query planning, intent fallback).
-- [ ] A hand-written `schema_for(provider, Model)` adapter for each provider's native mode:
+- [x] A hand-written `schema_for(provider, Model)` adapter for each provider's native mode:
       Gemini JSON-schema output; Groq `strict: true` (GPT-OSS models only); NVIDIA NIM
       `guided_json` via `extra_body`; Ollama `format=<schema>`.
-- [ ] Validate with Pydantic, **re-ask once** with the validation error, then move to the
+- [x] Validate with Pydantic, **re-ask once** with the validation error, then move to the
       next provider.
-- [ ] Intent fallback uses a single-field enum schema. That's the cheapest and most
+- [x] Intent fallback uses a single-field enum schema. That's the cheapest and most
       reliable form, because provider schema coverage drops sharply as schemas grow.
 - Evidence (independent): 0.6B–4B models go from 7–21% schema-invalid output to 0%.
   JSONSchemaBench found constrained decoding also *raised* accuracy by up to ~4 points.

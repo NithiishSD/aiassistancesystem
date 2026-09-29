@@ -301,7 +301,23 @@ class TestOrchestratorIntegration:
         import orchestrator
         from unittest.mock import patch
 
-        with patch("orchestrator.llm_provider.generate_chat", side_effect=RuntimeError("down")):
+        with patch("orchestrator.llm_provider.generate_structured",
+                   side_effect=orchestrator.llm_provider.StructuredOutputError("no valid reply")):
             result = orchestrator._extract_academic_intent("anything at all")
 
         assert result["action"] == "review"
+
+    def test_extraction_returns_validated_fields(self):
+        import orchestrator
+        import llm_schemas
+        from unittest.mock import patch
+
+        data = llm_schemas.AcademicIntent(action="log", topic="graphs", result="solved",
+                                          problem="", difficulty="medium", minutes=20)
+        with patch("orchestrator.llm_provider.generate_structured",
+                   return_value={"data": data, "answer": "", "source": "gemini"}) as llm:
+            result = orchestrator._extract_academic_intent("solved a medium graphs problem in 20 minutes")
+
+        assert result == {"action": "log", "topic": "graphs", "result": "solved",
+                          "problem": "", "difficulty": "medium", "minutes": 20}
+        assert llm.call_args.args[1] is llm_schemas.AcademicIntent

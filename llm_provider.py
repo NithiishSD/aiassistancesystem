@@ -17,8 +17,10 @@ from typing import Any, Callable
 
 import requests
 from dotenv import load_dotenv
+from pydantic import BaseModel, ValidationError
 
 import ollama
+from llm_schemas import json_schema_for
 from zedek_logger import get_logger
 
 load_dotenv()
@@ -74,6 +76,12 @@ _model_cache: dict[str, tuple[float, list[str]]] = {}
 
 class AllProvidersUnavailableError(RuntimeError):
     """Raised when all configured providers, including local Ollama, fail."""
+
+
+class StructuredOutputError(AllProvidersUnavailableError):
+    """No provider, including local Ollama, produced a reply matching the schema.
+
+    Subclasses AllProvidersUnavailableError so existing handlers still apply."""
 
 
 def _safe_error_text(error: Exception) -> str:
@@ -232,22 +240,42 @@ def _int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _openai_compatible(
+# ── Schema-constrained output (ROADMAP F2) ──────────────────────────────────
+# Native constrained-output form per provider. A provider/model that rejects
+# its native form with HTTP 400 is recorded here and gets JSON mode plus the
+# schema in the prompt for the rest of the session.
+_SCHEMA_UNSUPPORTED: set[tuple[str, str]] = set()
+# Groq honours strict json_schema only on these models; others ignore strict.
+GROQ_STRICT_SCHEMA_PREFIXES = ("openai/gpt-oss",)
+
+
+def _schema_hint(messages: list[dict[str, str]], schema: dict[str, Any]) -> list[dict[str, str]]:
+    """Messages plus the schema as text, for requests that are not natively constrained."""
+    compact = json.dumps(schema, separators=(",", ":"))
+    return [*messages, {"role": "user",
+                        "content": f"Respond with only a JSON object matching this JSON schema: {compact}"}]
+
+
+def _is_bad_request(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    return isinstance(error, requests.exceptions.HTTPError) and getattr(response, "status_code", None) == 400
+
+
+def _mark_schema_unsupported(source: str, model: str) -> None:
+    _SCHEMA_UNSUPPORTED.add((source, model))
+    log.info("structured_mode_rejected", extra={"source": source, "model": model})
+
+
+def _post_openai_compatible(
     source: str,
     endpoint: str,
     api_key: str,
     model: str,
     messages: list[dict[str, str]],
-    json_mode: bool,
-    extra_headers: dict[str, str] | None = None,
+    extra_payload: dict[str, Any],
+    extra_headers: dict[str, str] | None,
 ) -> ProviderReply:
-    if not api_key:
-        raise RuntimeError(f"{source} API key is not configured")
-
-    payload: dict[str, Any] = {"model": model, "messages": messages}
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-
+    payload: dict[str, Any] = {"model": model, "messages": messages, **extra_payload}
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -276,21 +304,45 @@ def _openai_compatible(
         output_tokens=_int_or_none(usage.get("completion_tokens")),
     )
 
-def _gemini(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
-    api_key = os.getenv("GEMINI_API_KEY")
+
+def _openai_compatible(
+    source: str,
+    endpoint: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    json_mode: bool,
+    extra_headers: dict[str, str] | None = None,
+    schema: dict[str, Any] | None = None,
+    schema_style: str = "hint",
+) -> ProviderReply:
+    """schema_style: "strict" (json_schema, strict), "nvext" (NIM guided_json),
+    or "hint" (json_object with the schema in the prompt)."""
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
+        raise RuntimeError(f"{source} API key is not configured")
 
-    contents = []
-    for message in messages:
-        role = "model" if message["role"] == "assistant" else "user"
-        contents.append({"role": role, "parts": [{"text": message["content"]}]})
+    if schema is not None and schema_style != "hint" and (source, model) not in _SCHEMA_UNSUPPORTED:
+        if schema_style == "strict":
+            native: dict[str, Any] = {"response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": schema, "strict": True},
+            }}
+        else:  # nvext
+            native = {"nvext": {"guided_json": schema}}
+        try:
+            return _post_openai_compatible(source, endpoint, api_key, model, messages, native, extra_headers)
+        except requests.exceptions.HTTPError as err:
+            if not _is_bad_request(err):
+                raise
+            _mark_schema_unsupported(source, model)
 
-    generation_config: dict[str, str] = {}
-    if json_mode:
-        generation_config["responseMimeType"] = "application/json"
+    if schema is not None:
+        messages = _schema_hint(messages, schema)
+    extra: dict[str, Any] = {"response_format": {"type": "json_object"}} if (json_mode or schema is not None) else {}
+    return _post_openai_compatible(source, endpoint, api_key, model, messages, extra, extra_headers)
 
-    model_name = os.getenv("GEMINI_MODEL") or resolve_gemini_model()
+def _gemini_request(api_key: str, model_name: str, contents: list[dict],
+                    generation_config: dict[str, Any]) -> ProviderReply:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
 
     # Try up to 2 times to handle transient 503/500 errors
@@ -319,9 +371,46 @@ def _gemini(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
                 time.sleep(1)
                 continue
             raise
+    raise RuntimeError("unreachable")  # pragma: no cover
 
-def _groq(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
+
+def _gemini_contents(messages: list[dict[str, str]]) -> list[dict]:
+    contents = []
+    for message in messages:
+        role = "model" if message["role"] == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": message["content"]}]})
+    return contents
+
+
+def _gemini(messages: list[dict[str, str]], json_mode: bool,
+            schema: dict[str, Any] | None = None) -> ProviderReply:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    model_name = os.getenv("GEMINI_MODEL") or resolve_gemini_model()
+    generation_config: dict[str, Any] = {}
+    if json_mode or schema is not None:
+        generation_config["responseMimeType"] = "application/json"
+
+    if schema is not None and ("gemini", model_name) not in _SCHEMA_UNSUPPORTED:
+        try:
+            return _gemini_request(api_key, model_name, _gemini_contents(messages),
+                                   {**generation_config, "responseJsonSchema": schema})
+        except requests.exceptions.HTTPError as err:
+            if not _is_bad_request(err):
+                raise
+            _mark_schema_unsupported("gemini", model_name)
+
+    if schema is not None:
+        messages = _schema_hint(messages, schema)
+    return _gemini_request(api_key, model_name, _gemini_contents(messages), generation_config)
+
+
+def _groq(messages: list[dict[str, str]], json_mode: bool,
+          schema: dict[str, Any] | None = None) -> ProviderReply:
     model = os.getenv("GROQ_MODEL") or resolve_groq_model()
+    strict = model.startswith(GROQ_STRICT_SCHEMA_PREFIXES)
     return _openai_compatible(
         "groq",
         "https://api.groq.com/openai/v1/chat/completions",
@@ -329,10 +418,13 @@ def _groq(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
         model,
         messages,
         json_mode,
+        schema=schema,
+        schema_style="strict" if strict else "hint",
     )
 
 
-def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
+def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool,
+                schema: dict[str, Any] | None = None) -> ProviderReply:
     api_key = os.getenv("NVIDIA_API_KEY", "")
     if not api_key:
         raise RuntimeError("nvidia_nim API key is not configured")
@@ -343,10 +435,13 @@ def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> ProviderRepl
         resolve_nvidia_model(),
         messages,
         json_mode,
+        schema=schema,
+        schema_style="nvext",
     )
 
 
-def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
+def _openrouter(messages: list[dict[str, str]], json_mode: bool,
+                schema: dict[str, Any] | None = None) -> ProviderReply:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY", "")
     if not api_key:
         raise RuntimeError("openrouter API key is not configured")
@@ -364,10 +459,13 @@ def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> ProviderRepl
             "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
             "X-OpenRouter-Title": os.getenv("OPENROUTER_SITE_NAME", "Zedek"),
         },
+        schema=schema,
+        schema_style="hint",  # free-model support varies
     )
 
 
-def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
+def _cerebras(messages: list[dict[str, str]], json_mode: bool,
+              schema: dict[str, Any] | None = None) -> ProviderReply:
     return _openai_compatible(
         "cerebras",
         "https://api.cerebras.ai/v1/chat/completions",
@@ -375,6 +473,8 @@ def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
         os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
         messages,
         json_mode,
+        schema=schema,
+        schema_style="strict",
     )
 
 
@@ -387,11 +487,21 @@ def _field(obj: Any, key: str) -> Any:
         return getattr(obj, key, None)
 
 
-def _local(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
+def _local(messages: list[dict[str, str]], json_mode: bool,
+           schema: dict[str, Any] | None = None) -> ProviderReply:
     options: dict[str, Any] = {}
-    if json_mode:
+    if json_mode or schema is not None:
         options["format"] = "json"
-    response = ollama.chat(model=LOCAL_MODEL, messages=messages, **options)
+    response = None
+    if schema is not None and ("local", LOCAL_MODEL) not in _SCHEMA_UNSUPPORTED:
+        try:
+            response = ollama.chat(model=LOCAL_MODEL, messages=messages, format=schema)
+        except ollama.ResponseError:
+            _mark_schema_unsupported("local", LOCAL_MODEL)
+    if response is None:
+        if schema is not None:
+            messages = _schema_hint(messages, schema)
+        response = ollama.chat(model=LOCAL_MODEL, messages=messages, **options)
     reported = _field(response, "model")
     return ProviderReply(
         text=response["message"]["content"],
@@ -666,16 +776,100 @@ def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool,
     return _result(cleaned_answer, "local", reply)
 
 
-def generate_chat(
-    messages: list[dict[str, str]],
-    json_mode: bool = False,
-    force_local: bool = False,
-    task: str | None = None,
-) -> dict[str, Any]:
-    """Generate a response using a task-aware provider chain.
+# ── Structured replies: validate, re-ask once, move on ──────────────────────
 
-    Returns {"answer", "source", "model", "usage": {"input_tokens", "output_tokens"}}.
-    """
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
+_MAX_REASK_ECHO_CHARS = 2000
+
+
+def _parse_validated(text: str, response_model: type[BaseModel]) -> BaseModel:
+    """JSON text -> validated model. Raises ValidationError (a ValueError)."""
+    cleaned = strip_thinking_tags(text or "").strip()
+    fenced = _CODE_FENCE_RE.match(cleaned)
+    if fenced:
+        cleaned = fenced.group(1)
+    return response_model.model_validate_json(cleaned)
+
+
+def _validation_summary(error: Exception) -> str:
+    """Where and why validation failed, never the reply's content."""
+    if isinstance(error, ValidationError):
+        parts = [f"{'.'.join(str(p) for p in e['loc']) or '<root>'}: {e['msg']}" for e in error.errors()[:3]]
+        return "; ".join(parts)
+    return type(error).__name__
+
+
+def _structured_from(source: str, call: Callable[[list[dict[str, str]]], ProviderReply],
+                     messages: list[dict[str, str]],
+                     response_model: type[BaseModel]) -> tuple[BaseModel, ProviderReply] | None:
+    """One provider: first reply, then at most one correction. None = still invalid.
+    Exceptions from `call` (network, quota) propagate to the chain loop."""
+    reply = call(messages)
+    for attempt in (1, 2):
+        try:
+            return _parse_validated(reply.text, response_model), reply
+        except ValueError as error:
+            summary = _validation_summary(error)
+            log.info("structured_output_invalid", extra={
+                "source": source, "attempt": attempt,
+                "schema": response_model.__name__, "error": summary[:300],
+            })
+            if attempt == 2:
+                return None
+            reply = call([
+                *messages,
+                {"role": "assistant", "content": (reply.text or "")[:_MAX_REASK_ECHO_CHARS]},
+                {"role": "user", "content": (
+                    f"That reply did not match the required JSON schema: {summary}. "
+                    "Reply again with only JSON that matches the schema."
+                )},
+            ])
+    return None  # pragma: no cover
+
+
+def _call_provider(provider: Callable[..., ProviderReply], messages: list[dict[str, str]],
+                   json_mode: bool, schema: dict[str, Any] | None) -> ProviderReply:
+    # Keyword only when set, so two-argument provider stubs keep working.
+    if schema is None:
+        return provider(messages, json_mode)
+    return provider(messages, json_mode, schema=schema)
+
+
+def _run_local_structured(messages: list[dict[str, str]], task: str | None,
+                          response_model: type[BaseModel],
+                          schema: dict[str, Any]) -> dict[str, Any]:
+    def call(msgs: list[dict[str, str]]) -> ProviderReply:
+        started = time.perf_counter()
+        try:
+            reply = _local(msgs, True, schema=schema)
+        except Exception as error:
+            log.info("local_fallback_failed", extra={"error": _safe_error_text(error)})
+            raise AllProvidersUnavailableError(
+                "All cloud providers failed and local Ollama is unavailable. "
+                f"Check `ollama serve` and `ollama pull {LOCAL_MODEL}`."
+            ) from error
+        log.info("provider_response", extra={"source": "local"})
+        _log_gen_ai_call("local", reply, started, task)
+        return reply
+
+    outcome = _structured_from("local", call, messages, response_model)
+    if outcome is None:
+        raise StructuredOutputError(
+            f"No provider produced a reply matching {response_model.__name__}.")
+    data, reply = outcome
+    return {**_result(reply.text, "local", reply), "data": data}
+
+
+def _dispatch(
+    messages: list[dict[str, str]],
+    json_mode: bool,
+    force_local: bool,
+    task: str | None,
+    response_model: type[BaseModel] | None = None,
+) -> dict[str, Any]:
+    """The provider chain shared by generate_chat and generate_structured."""
+    schema = json_schema_for(response_model) if response_model is not None else None
+
     if task == "coding" and not force_local:
         if not cloud_coding_allowed():
             force_local = True
@@ -689,11 +883,16 @@ def generate_chat(
             else:
                 messages = sanitized
 
+    def finish_local() -> dict[str, Any]:
+        if response_model is None:
+            return _run_local_or_raise(messages, json_mode, task)
+        return _run_local_structured(messages, task, response_model, schema)
+
     if force_local or not cloud_enabled():
         log.info("local_only_mode", extra={
             "reason": "force_local" if force_local else "ALLOW_CLOUD_disabled",
         })
-        return _run_local_or_raise(messages, json_mode, task)
+        return finish_local()
 
     chain = TASK_PROVIDERS.get(task, DEFAULT_CHAIN) if task else DEFAULT_CHAIN
     for source in chain:
@@ -708,21 +907,65 @@ def generate_chat(
             reason, detail = skip
             log.info("provider_skipped", extra={"source": source, "reason": reason, **detail})
             continue
-        started = time.perf_counter()
-        try:
-            reply = provider(messages, json_mode)
-        except Exception as error:
-            if not _is_not_configured(error):
-                _record_failure(source, error)
-            log.info("provider_failed", extra={"source": source, "error": _safe_error_text(error)})
-            continue
-        _record_success(source, reply)
-        cleaned_answer = strip_thinking_tags(reply.text) if not json_mode else reply.text
-        log.info("provider_response", extra={"source": source})
-        _log_gen_ai_call(source, reply, started, task)
-        return _result(cleaned_answer, source, reply)
 
-    return _run_local_or_raise(messages, json_mode, task)
+        def call(msgs: list[dict[str, str]], source: str = source,
+                 provider: Callable[..., ProviderReply] = provider) -> ProviderReply:
+            """One counted, traced request (re-asks included)."""
+            started = time.perf_counter()
+            try:
+                reply = _call_provider(provider, msgs, json_mode, schema)
+            except Exception as error:
+                if not _is_not_configured(error):
+                    _record_failure(source, error)
+                log.info("provider_failed", extra={"source": source, "error": _safe_error_text(error)})
+                raise
+            _record_success(source, reply)
+            log.info("provider_response", extra={"source": source})
+            _log_gen_ai_call(source, reply, started, task)
+            return reply
+
+        try:
+            if response_model is None:
+                reply = call(messages)
+                cleaned_answer = strip_thinking_tags(reply.text) if not json_mode else reply.text
+                return _result(cleaned_answer, source, reply)
+            outcome = _structured_from(source, call, messages, response_model)
+        except Exception:
+            continue  # already recorded and logged by call()
+        if outcome is not None:
+            data, reply = outcome
+            return {**_result(reply.text, source, reply), "data": data}
+
+    return finish_local()
+
+
+def generate_chat(
+    messages: list[dict[str, str]],
+    json_mode: bool = False,
+    force_local: bool = False,
+    task: str | None = None,
+) -> dict[str, Any]:
+    """Generate a response using a task-aware provider chain.
+
+    Returns {"answer", "source", "model", "usage": {"input_tokens", "output_tokens"}}.
+    """
+    return _dispatch(messages, json_mode, force_local, task)
+
+
+def generate_structured(
+    messages: list[dict[str, str]],
+    response_model: type[BaseModel],
+    task: str | None = None,
+    force_local: bool = False,
+) -> dict[str, Any]:
+    """Like generate_chat, but the reply is constrained to and validated against
+    `response_model` (ROADMAP F2). Adds "data": a validated instance.
+
+    Each provider gets its native schema mode where it has one, and one re-ask
+    with the validation error before the chain moves on. Raises
+    StructuredOutputError if no provider, local included, produces valid data.
+    """
+    return _dispatch(messages, True, force_local, task, response_model)
 
 
 if __name__ == "__main__":
