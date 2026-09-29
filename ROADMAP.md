@@ -231,16 +231,17 @@ to tell whether an answer came from Gemini or the local 8B. That's an invisible 
 
 ---
 
-### C3. Provider model resolution (found by the F2 live check, 2026-09-29)
+### C3. Provider model resolution ✅ DONE 2026-09-29 (found by the F2 live check)
+*Shipped as OpenSpec change `fix-provider-model-resolution`. Candidates refreshed from live probes; only candidates are ever requested (a rotted catalog skips the provider with a `model_candidates_stale` warning); a 404 retires the model for the session and retries once; 402 gets the 1 h auth cooldown; 200-with-error bodies (OpenRouter) now drive cooldowns. Live: gemini-3-flash-preview, gpt-oss-120b (Groq), nemotron-3-super (NIM, OpenRouter) all answer. **Cerebras returns 402 Payment Required for every model — the account needs a plan or the key should be removed.***
 Every candidate list had rotted: none of Groq's llama candidates exist any more, so
 `resolve_groq_model()` fell back to the catalog's *first* entry, which can be Whisper, a
 prompt-guard classifier or a TTS model. OpenRouter likewise picked an arbitrary `:free`
 model, and the configured Cerebras and NVIDIA models return 404.
-- [ ] Refresh the candidate lists from the live catalogs.
-- [ ] Never fall back to an arbitrary catalog entry: filter out non-chat models (speech,
+- [x] Refresh the candidate lists from the live catalogs.
+- [x] Never fall back to an arbitrary catalog entry: filter out non-chat models (speech,
       guard/safeguard, embedding, TTS), and prefer "no model" (skip the provider) over a
       wrong one.
-- [ ] A 404 on the chat endpoint marks that model dead for the session and re-resolves.
+- [x] A 404 on the chat endpoint marks that model dead for the session and re-resolves.
 
 ---
 

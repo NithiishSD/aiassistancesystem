@@ -35,28 +35,37 @@ log.info("provider_mode_configured", extra={
     "cloud_coding_allowed": os.getenv("ALLOW_CLOUD_CODING", "true").strip().lower() not in ("false", "0", "no"),
 })
 
-# Dynamic candidate pools — first live match in provider's catalog wins
-GEMINI_CANDIDATES = [
+# Candidate pools, in preference order. Only these models are ever requested
+# (ROADMAP C3): a catalog with none of them skips the provider rather than
+# using an arbitrary entry. Probed live 2026-09-29 unless noted.
+GEMINI_CANDIDATES = [  # Google's current free-tier Flash line (not probed: unreachable here)
+    "gemini-3-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.6-flash",
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
 ]
 GROQ_CANDIDATES = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
 ]
 NVIDIA_CODING_CANDIDATES = [
-    "meta/llama-3.3-70b-instruct",
-    "nvidia/llama-3.1-nemotron-70b-instruct",
-    "mistralai/mistral-nemotron",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "openai/gpt-oss-20b",
+    "deepseek-ai/deepseek-v4.1-flash",
+    "z-ai/glm-5.3",
 ]
 OPENROUTER_CODING_CANDIDATES = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-2-9b-it:free",
-    "qwen/qwen-2.5-72b-instruct:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3.8-27b:free",
+    "google/gemma-4-31b-it:free",
+]
+CEREBRAS_CANDIDATES = [
+    "gpt-oss-120b",
+    "qwen-3.8-27b",
 ]
 # Ordered by quota headroom: OpenRouter's :free tier allows only 50 requests/day
 # (verified against its docs), so it is never first in a chain.
@@ -191,36 +200,96 @@ def _fetch_openrouter_free_models() -> list[str]:
     ]
 
 
-def resolve_gemini_model() -> str:
-    live = _cached_fetch("gemini", _fetch_gemini_models)
-    for candidate in GEMINI_CANDIDATES:
+def _fetch_cerebras_models() -> list[str]:
+    api_key = os.getenv("CEREBRAS_API_KEY", "")
+    if not api_key:
+        return []
+    response = requests.get(
+        "https://api.cerebras.ai/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return [m["id"] for m in response.json().get("data", [])]
+
+
+# Models that answered 404 this session: listed in a catalog is not proof of
+# being served (NIM lists several it no longer serves).
+_DEAD_MODELS: set[tuple[str, str]] = set()
+
+
+def _choose_model(source: str, candidates: list[str], live: list[str]) -> str | None:
+    """First usable candidate present in the live catalog; None if the catalog
+    is readable but holds none of them. If the catalog is unreachable, try the
+    candidates in order."""
+    usable = [c for c in candidates if (source, c) not in _DEAD_MODELS]
+    if not live:
+        return usable[0] if usable else None
+    for candidate in usable:
         if candidate in live:
             return candidate
-    return live[0] if live else GEMINI_CANDIDATES[0]
+    log.warning("model_candidates_stale", extra={"source": source, "candidates": candidates})
+    return None
+
+
+def _resolve(source: str, cache_key: str, fetch_fn, candidates: list[str]) -> str:
+    model = _choose_model(source, candidates, _cached_fetch(cache_key, fetch_fn))
+    if model is None:
+        # "not configured": the chain skips it without counting quota.
+        raise RuntimeError(f"{source}: no usable chat model (not configured)")
+    return model
+
+
+def resolve_gemini_model() -> str:
+    return _resolve("gemini", "gemini", _fetch_gemini_models, GEMINI_CANDIDATES)
 
 
 def resolve_groq_model() -> str:
-    live = _cached_fetch("groq", _fetch_groq_models)
-    for candidate in GROQ_CANDIDATES:
-        if candidate in live:
-            return candidate
-    return live[0] if live else GROQ_CANDIDATES[0]
+    return _resolve("groq", "groq", _fetch_groq_models, GROQ_CANDIDATES)
 
 
 def resolve_nvidia_model() -> str:
-    live = _cached_fetch("nvidia", _fetch_nvidia_models)
-    for candidate in NVIDIA_CODING_CANDIDATES:
-        if candidate in live:
-            return candidate
-    return live[0] if live else NVIDIA_CODING_CANDIDATES[0]
+    return _resolve("nvidia_nim", "nvidia", _fetch_nvidia_models, NVIDIA_CODING_CANDIDATES)
 
 
 def resolve_openrouter_model() -> str:
-    live = _cached_fetch("openrouter", _fetch_openrouter_free_models)
-    for candidate in OPENROUTER_CODING_CANDIDATES:
-        if candidate in live:
-            return candidate
-    return live[0] if live else OPENROUTER_CODING_CANDIDATES[0]
+    return _resolve("openrouter", "openrouter", _fetch_openrouter_free_models, OPENROUTER_CODING_CANDIDATES)
+
+
+def resolve_cerebras_model() -> str:
+    return _resolve("cerebras", "cerebras", _fetch_cerebras_models, CEREBRAS_CANDIDATES)
+
+
+def _model_for(source: str, env_var: str, resolver: Callable[[], str]) -> str:
+    """The env override unless it has been retired this session, else the resolver's pick."""
+    override = os.getenv(env_var)
+    if override and (source, override) not in _DEAD_MODELS:
+        return override
+    return resolver()
+
+
+def _with_model_fallback(source: str, pick: Callable[[], str],
+                         send: Callable[[str], "ProviderReply"]) -> "ProviderReply":
+    """send(pick()); on HTTP 404 retire that model and retry once with the next pick."""
+    def send_or_retire(model: str) -> "ProviderReply":
+        try:
+            return send(model)
+        except requests.exceptions.HTTPError as err:
+            if getattr(getattr(err, "response", None), "status_code", None) == 404:
+                _DEAD_MODELS.add((source, model))
+                log.warning("model_unavailable", extra={"source": source, "model": model})
+            raise
+
+    model = pick()
+    try:
+        return send_or_retire(model)
+    except requests.exceptions.HTTPError:
+        if (source, model) not in _DEAD_MODELS:
+            raise  # not a 404
+        replacement = pick()
+        if replacement == model:
+            raise
+        return send_or_retire(replacement)
 
 
 @dataclass(frozen=True)
@@ -266,6 +335,24 @@ def _mark_schema_unsupported(source: str, model: str) -> None:
     log.info("structured_mode_rejected", extra={"source": source, "model": model})
 
 
+class _EmbeddedStatus:
+    """Stands in for a response so an error body's status drives cooldowns."""
+
+    def __init__(self, status_code: int | None) -> None:
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+
+
+def _raise_embedded_error(source: str, data: Any) -> None:
+    """OpenRouter can answer HTTP 200 with {"error": {"code": 429, ...}} when an
+    upstream fails. Raise it as the HTTP error it is, so a 429 cools the provider
+    down and a 404 retires the model."""
+    error = data.get("error") if isinstance(data, dict) and isinstance(data.get("error"), dict) else {}
+    code = error.get("code") if isinstance(error.get("code"), int) and not isinstance(error.get("code"), bool) else None
+    raise requests.exceptions.HTTPError(
+        f"{source} returned no choices (embedded error code {code})", response=_EmbeddedStatus(code))
+
+
 def _post_openai_compatible(
     source: str,
     endpoint: str,
@@ -291,6 +378,8 @@ def _post_openai_compatible(
     )
     response.raise_for_status()
     data = response.json()
+    if not data.get("choices"):
+        _raise_embedded_error(source, data)
     content = data["choices"][0]["message"]["content"]
     if not isinstance(content, str):
         raise ValueError(f"{source} returned a non-text response")
@@ -388,39 +477,46 @@ def _gemini(messages: list[dict[str, str]], json_mode: bool,
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    model_name = os.getenv("GEMINI_MODEL") or resolve_gemini_model()
     generation_config: dict[str, Any] = {}
     if json_mode or schema is not None:
         generation_config["responseMimeType"] = "application/json"
 
-    if schema is not None and ("gemini", model_name) not in _SCHEMA_UNSUPPORTED:
-        try:
-            return _gemini_request(api_key, model_name, _gemini_contents(messages),
-                                   {**generation_config, "responseJsonSchema": schema})
-        except requests.exceptions.HTTPError as err:
-            if not _is_bad_request(err):
-                raise
-            _mark_schema_unsupported("gemini", model_name)
+    def send(model_name: str) -> ProviderReply:
+        msgs = messages
+        if schema is not None and ("gemini", model_name) not in _SCHEMA_UNSUPPORTED:
+            try:
+                return _gemini_request(api_key, model_name, _gemini_contents(msgs),
+                                       {**generation_config, "responseJsonSchema": schema})
+            except requests.exceptions.HTTPError as err:
+                if not _is_bad_request(err):
+                    raise
+                _mark_schema_unsupported("gemini", model_name)
+        if schema is not None:
+            msgs = _schema_hint(msgs, schema)
+        return _gemini_request(api_key, model_name, _gemini_contents(msgs), generation_config)
 
-    if schema is not None:
-        messages = _schema_hint(messages, schema)
-    return _gemini_request(api_key, model_name, _gemini_contents(messages), generation_config)
+    return _with_model_fallback("gemini", lambda: _model_for("gemini", "GEMINI_MODEL", resolve_gemini_model), send)
 
 
 def _groq(messages: list[dict[str, str]], json_mode: bool,
           schema: dict[str, Any] | None = None) -> ProviderReply:
-    model = os.getenv("GROQ_MODEL") or resolve_groq_model()
-    strict = model.startswith(GROQ_STRICT_SCHEMA_PREFIXES)
-    return _openai_compatible(
-        "groq",
-        "https://api.groq.com/openai/v1/chat/completions",
-        os.getenv("GROQ_API_KEY", ""),
-        model,
-        messages,
-        json_mode,
-        schema=schema,
-        schema_style="strict" if strict else "hint",
-    )
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("groq API key is not configured")
+
+    def send(model: str) -> ProviderReply:
+        return _openai_compatible(
+            "groq",
+            "https://api.groq.com/openai/v1/chat/completions",
+            api_key,
+            model,
+            messages,
+            json_mode,
+            schema=schema,
+            schema_style="strict" if model.startswith(GROQ_STRICT_SCHEMA_PREFIXES) else "hint",
+        )
+
+    return _with_model_fallback("groq", lambda: _model_for("groq", "GROQ_MODEL", resolve_groq_model), send)
 
 
 def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool,
@@ -428,16 +524,20 @@ def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool,
     api_key = os.getenv("NVIDIA_API_KEY", "")
     if not api_key:
         raise RuntimeError("nvidia_nim API key is not configured")
-    return _openai_compatible(
-        "nvidia_nim",
-        "https://integrate.api.nvidia.com/v1/chat/completions",
-        api_key,
-        resolve_nvidia_model(),
-        messages,
-        json_mode,
-        schema=schema,
-        schema_style="nvext",
-    )
+
+    def send(model: str) -> ProviderReply:
+        return _openai_compatible(
+            "nvidia_nim",
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            api_key,
+            model,
+            messages,
+            json_mode,
+            schema=schema,
+            schema_style="nvext",
+        )
+
+    return _with_model_fallback("nvidia_nim", lambda: _model_for("nvidia_nim", "NVIDIA_MODEL", resolve_nvidia_model), send)
 
 
 def _openrouter(messages: list[dict[str, str]], json_mode: bool,
@@ -446,36 +546,46 @@ def _openrouter(messages: list[dict[str, str]], json_mode: bool,
     if not api_key:
         raise RuntimeError("openrouter API key is not configured")
 
-    model = os.getenv("OPENROUTER_MODEL") or resolve_openrouter_model()
+    def send(model: str) -> ProviderReply:
+        return _openai_compatible(
+            "openrouter",
+            "https://openrouter.ai/api/v1/chat/completions",
+            api_key,
+            model,
+            messages,
+            json_mode,
+            extra_headers={
+                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
+                "X-OpenRouter-Title": os.getenv("OPENROUTER_SITE_NAME", "Zedek"),
+            },
+            schema=schema,
+            schema_style="hint",  # free-model support varies
+        )
 
-    return _openai_compatible(
-        "openrouter",
-        "https://openrouter.ai/api/v1/chat/completions",
-        api_key,
-        model,
-        messages,
-        json_mode,
-        extra_headers={
-            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
-            "X-OpenRouter-Title": os.getenv("OPENROUTER_SITE_NAME", "Zedek"),
-        },
-        schema=schema,
-        schema_style="hint",  # free-model support varies
-    )
+    return _with_model_fallback(
+        "openrouter", lambda: _model_for("openrouter", "OPENROUTER_MODEL", resolve_openrouter_model), send)
 
 
 def _cerebras(messages: list[dict[str, str]], json_mode: bool,
               schema: dict[str, Any] | None = None) -> ProviderReply:
-    return _openai_compatible(
-        "cerebras",
-        "https://api.cerebras.ai/v1/chat/completions",
-        os.getenv("CEREBRAS_API_KEY", ""),
-        os.getenv("CEREBRAS_MODEL", "llama-3.3-70b"),
-        messages,
-        json_mode,
-        schema=schema,
-        schema_style="strict",
-    )
+    api_key = os.getenv("CEREBRAS_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("cerebras API key is not configured")
+
+    def send(model: str) -> ProviderReply:
+        return _openai_compatible(
+            "cerebras",
+            "https://api.cerebras.ai/v1/chat/completions",
+            api_key,
+            model,
+            messages,
+            json_mode,
+            schema=schema,
+            schema_style="strict",
+        )
+
+    return _with_model_fallback(
+        "cerebras", lambda: _model_for("cerebras", "CEREBRAS_MODEL", resolve_cerebras_model), send)
 
 
 def _field(obj: Any, key: str) -> Any:
@@ -564,6 +674,7 @@ def _today() -> str:
 def _reset_health_for_tests() -> None:
     with _health_lock:
         _health.clear()
+    _DEAD_MODELS.clear()
 
 
 def _health_for(source: str) -> _ProviderHealth:
@@ -620,7 +731,7 @@ def _parse_duration(value: Any) -> float | None:
 
 def _cooldown_for(status: int | None, headers: Any) -> float:
     """How long to skip a provider after an HTTP error. 0 means don't skip."""
-    if status in (401, 403):
+    if status in (401, 402, 403):  # 402: plan/billing ended; retrying won't help
         return AUTH_FAILURE_COOLDOWN
     if status != 429:
         return 0.0

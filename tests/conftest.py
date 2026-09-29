@@ -60,15 +60,21 @@ def _block_real_llm_calls(monkeypatch):
     import ollama
     import requests
 
-    real_post = requests.post
+    real_post, real_get = requests.post, requests.get
 
     def guarded_post(url, *args, **kwargs):
         if any(host in str(url) for host in _LLM_HOSTS):
             raise RealLLMCallInTest(f"test tried to call a real LLM provider: {url}")
         return real_post(url, *args, **kwargs)
 
+    def guarded_get(url, *args, **kwargs):  # model catalogs live on the same hosts
+        if any(host in str(url) for host in _LLM_HOSTS):
+            raise RealLLMCallInTest(f"test tried to fetch a real LLM catalog: {url}")
+        return real_get(url, *args, **kwargs)
+
     def blocked_chat(*args, **kwargs):
         raise RealLLMCallInTest("test tried to call the real local model (ollama.chat)")
 
     monkeypatch.setattr(requests, "post", guarded_post)
+    monkeypatch.setattr(requests, "get", guarded_get)
     monkeypatch.setattr(ollama, "chat", blocked_chat)

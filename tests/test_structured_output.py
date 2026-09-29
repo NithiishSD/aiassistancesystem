@@ -108,6 +108,8 @@ def keys(monkeypatch):
         monkeypatch.setenv(name, "k")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
     monkeypatch.setenv("OPENROUTER_MODEL", "some/free:free")
+    monkeypatch.setenv("CEREBRAS_MODEL", "llama-3.3-70b")
+    monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-120b")
     monkeypatch.setattr(lp, "resolve_nvidia_model", lambda: "nim-model")
 
 
