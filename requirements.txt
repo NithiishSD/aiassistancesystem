@@ -14,7 +14,21 @@ posthog==3.5.0
 # Install CPU-only torch before this file so sentence-transformers does not
 # pull a CUDA build:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
-semantic-router==0.0.72
+# semantic-router==0.0.72 is installed by setup.sh with --no-deps, NOT from this file.
+# Its metadata pins numpy<2.0, while librosa 1.0 (pulled in by Resemblyzer for voice
+# verification) requires numpy>=2.1, so the two cannot be resolved together. The
+# router runs correctly on numpy 2.5.3 (verified by the full test suite, including
+# the routing eval), so the declared numpy<2 cap is stale. Its other runtime deps
+# are pinned here so a --no-deps install is complete:
+aiohttp==3.14.3
+colorama==0.4.6
+colorlog==6.12.0
+openai==1.109.1
+pydantic==2.13.4
+pyyaml==6.0.3
+regex==2026.7.19
+requests-mock==1.12.1
+tiktoken==0.14.0
 sentence-transformers==3.2.1
 
 # --- Orchestration / async ---
@@ -61,3 +75,7 @@ setuptools==83.0.0
 # Offline speech-to-text. Model is NOT installed by pip — download
 # vosk-model-small-en-us-0.15 into models/ (see setup.sh).
 vosk==0.3.45
+# --- Routing evaluation (evals/routing_eval.py, tests/test_routing_eval.py) ---
+# Previously only a transitive dependency; now imported directly for the
+# per-class metrics and confusion matrix.
+scikit-learn==1.9.0

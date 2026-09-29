@@ -325,14 +325,18 @@ def _save_dynamic_utterances(data: dict[str, list[str]]) -> None:
 
 # ── Router construction (static + dynamic merged) ────────────────────────────
 
-def _build_intent_router() -> RouteLayer:
+def _build_intent_router(include_dynamic: bool = True) -> RouteLayer:
     """Build the Layer 1 intent RouteLayer from static + dynamic utterances.
 
     Static utterances (from ``INTENT_UTTERANCES``) and runtime-learned
     utterances (from ``data/dynamic_utterances.json``) are merged per intent.
     Static phrases take precedence; duplicates are discarded.
+
+    ``include_dynamic=False`` builds from the static phrases only. The dynamic
+    file also holds MCP-registered tool descriptions and differs per machine,
+    so the routing evaluation uses the static build to stay reproducible.
     """
-    dynamic = _load_dynamic_utterances()
+    dynamic = _load_dynamic_utterances() if include_dynamic else {}
     merged: dict[str, list[str]] = {
         name: list(phrases) for name, phrases in INTENT_UTTERANCES.items()
     }
@@ -662,6 +666,50 @@ def _is_unsupported_action_request(text: str) -> bool:
                 or re.search(app_control, cleaned))
 
 
+# ── Layer 1 decision + real score ────────────────────────────────────────────
+
+def _layer1_score(router, text: str, decided_name: str | None) -> tuple[float, bool]:
+    """The similarity the router actually compared against the threshold.
+
+    semantic-router 0.0.72 never fills ``RouteChoice.similarity_score``. The
+    real value is the best single-phrase similarity of the winning route: the
+    route is picked by the SUM of phrase scores, then accepted only if
+    ``max(scores) > route.score_threshold``. That lives in private methods, so
+    they are used for the score only and checked against the public decision.
+
+    Returns (score, verified). If the internals disagree with the public
+    decision or raise (e.g. a test's mock router), returns the previous
+    constant (ROUTE_THRESHOLD on a hit, 0.0 on a miss) and verified=False.
+    """
+    fallback = ROUTE_THRESHOLD if decided_name else 0.0
+    try:
+        vector = router._encode(text=text)
+        route, scores = router._retrieve_top_route(vector)
+        passed = router._check_threshold(scores, route)
+        internal_name = route.name if (route is not None and passed) else None
+        score = float(max(scores)) if scores else 0.0
+    except Exception as err:
+        log.info("layer1_score_unverified", extra={"reason": type(err).__name__})
+        return fallback, False
+    if internal_name != decided_name:
+        log.info("layer1_score_unverified", extra={
+            "reason": "route_mismatch", "public": decided_name, "internal": internal_name,
+        })
+        return fallback, False
+    return round(score, 4), True
+
+
+def _layer1_route_with(router, text: str) -> tuple[str | None, float]:
+    """Layer-1 decision (public router call, authoritative) plus its real score."""
+    decided_name = router(text).name or None
+    score, _verified = _layer1_score(router, text, decided_name)
+    return decided_name, score
+
+
+def _layer1_route(text: str) -> tuple[str | None, float]:
+    return _layer1_route_with(_intent_router, text)
+
+
 # ── Public classification API ─────────────────────────────────────────────────
 
 def classify_intent(text: str) -> dict:
@@ -696,9 +744,8 @@ def classify_intent(text: str) -> dict:
         return _ROUTING_CACHE[norm_key]
 
     # ── Layer 1: semantic-router with description-based embeddings ───────
-    result = _intent_router(text)
-    top_key = result.name or DEFAULT_INTENT
-    top_score = ROUTE_THRESHOLD if result.name else 0.0
+    layer1_name, top_score = _layer1_route_with(_intent_router, text)
+    top_key = layer1_name or DEFAULT_INTENT
 
     if top_score >= CONFIDENCE_THRESHOLD and top_key != DEFAULT_INTENT:
         func_value = top_key

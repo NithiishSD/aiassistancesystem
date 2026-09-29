@@ -1,0 +1,14 @@
+utterance,intent
+list every .cpp file on this machine,search_files
+which folders are eating up all my storage,disk_usage_by_folder
+"what's hogging my disk, folder wise",disk_usage_by_folder
+what's using all my ram right now,top_memory_processes
+which programs are hogging memory,top_memory_processes
+how many gigabytes are free on my disk,free_space_summary
+check free storage space left,free_space_summary
+how big is my downloads folder,directory_size
+how much space does my projects folder take,directory_size
+check the runtime and threads of code,list_processes_detailed
+launch brave browser pls,open_application
+what's my battery percentage,system_inspect
+what cpu does this laptop have,system_inspect

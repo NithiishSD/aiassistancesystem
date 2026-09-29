@@ -85,7 +85,14 @@ junk ~1.4–2.0). `answer_general_question()` still injects top-3 unconditionall
 - **Superseded long-term by F1.** A raw L2 cutoff shifts with query length and phrasing.
   The reranker score from F1 is the proper relevance gate and replaces the 1.0 cutoff.
 
-### A4. Routing evaluation harness
+### A4. Routing evaluation harness ✅ DONE 2026-09-29 (routing half)
+*Shipped as OpenSpec change `add-routing-eval`: 374-row golden set (22 per class, dev/test split),
+`evals/routing_eval.py`, a committed baseline, a ±2-point per-class gate in pytest, and 13 must-stay-local rows.*
+*The first baseline (test slice): accuracy 0.299, and **74.3% of requests escalate to the LLM**. F1 is 0.00 for coding,
+remember/correct fact, detailed-process, and research. It found a production bug: the acknowledgement guard matches "ty"/"ok"
+as substrings, so "type…", "…capacity…", "facebook", and "book…" never reach Layer 1 or the LLM. Next change fixes it.*
+*Also fixed: `requirements.txt` could not be installed from scratch (numpy pin vs semantic-router's stale numpy<2 cap).*
+
 Routing is the historical failure point and is completely unmeasured. ~16 intents and 27
 MCP tools now compete for phrasings; measured industry data shows routing accuracy
 collapses as tool count grows.

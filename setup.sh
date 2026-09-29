@@ -44,6 +44,9 @@ conda activate zedek-env
 echo "Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
+# semantic-router's metadata caps numpy<2, which conflicts with librosa (voice);
+# it works on numpy 2.x, so install it without letting pip re-resolve numpy.
+pip install --no-deps semantic-router==0.0.72
 
 # 6. Cache the local semantic-router embedding model before offline startup.
 # The classifier sets HF_HUB_OFFLINE=1 during normal operation, so this

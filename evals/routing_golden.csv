@@ -1,0 +1,375 @@
+utterance,intent,split
+where is my internship offer letter pdf,search_files,dev
+find the file called notes_week3.txt,search_files,test
+search my laptop for any .ipynb notebooks,search_files,dev
+locate every png screenshot i took last month,search_files,test
+is there a file named budget.xlsx somewhere,search_files,dev
+look for my old java assignment files,search_files,test
+find all the python scripts in my home folder,search_files,dev
+where did i put the project proposal doc,search_files,test
+search for files with 'invoice' in the name,search_files,dev
+can u find my aadhar scan,search_files,test
+list every .cpp file on this machine,search_files,dev
+"i lost my resume somewhere, find it",search_files,test
+find the zip i downloaded yesterday,search_files,dev
+search documents for a file named thesis_draft,search_files,test
+which folder has my lab record pdf,search_files,dev
+find files ending in .csv,search_files,test
+hunt down that ppt from the seminar,search_files,dev
+find markdown files about os notes,search_files,test
+search for mp4 files in downloads,search_files,dev
+where's the config.yaml for my project,search_files,test
+locate the certificate pdf from the hackathon,search_files,dev
+find any file named todo,search_files,test
+which folders are eating up all my storage,disk_usage_by_folder,dev
+show me the biggest directories in my home,disk_usage_by_folder,test
+"what's hogging my disk, folder wise",disk_usage_by_folder,dev
+break down disk usage per folder,disk_usage_by_folder,test
+top 10 largest folders on my drive,disk_usage_by_folder,dev
+which directory takes the most space,disk_usage_by_folder,test
+"my disk is almost full, which folders are huge",disk_usage_by_folder,dev
+rank my folders by size,disk_usage_by_folder,test
+show storage used by each folder in home,disk_usage_by_folder,dev
+which subfolders in downloads are the biggest,disk_usage_by_folder,test
+find the space hogs on my drive,disk_usage_by_folder,dev
+folder wise storage breakdown pls,disk_usage_by_folder,test
+what are the heaviest folders here,disk_usage_by_folder,dev
+which of my directories should i clean up to save space,disk_usage_by_folder,test
+list folders sorted by how much space they use,disk_usage_by_folder,dev
+show a per-directory disk usage report,disk_usage_by_folder,test
+biggest folders under documents,disk_usage_by_folder,dev
+which project folders are the largest,disk_usage_by_folder,test
+where is most of my storage going,disk_usage_by_folder,dev
+show me folders over a gigabyte,disk_usage_by_folder,test
+disk usage by directory please,disk_usage_by_folder,dev
+which folders grew the most in size,disk_usage_by_folder,test
+what's using all my ram right now,top_memory_processes,dev
+show top memory eating apps,top_memory_processes,test
+which programs are hogging memory,top_memory_processes,dev
+list processes sorted by ram usage,top_memory_processes,test
+"why is my ram at 90 percent, what's using it",top_memory_processes,dev
+top 5 memory heavy processes,top_memory_processes,test
+"what is chrome using so much memory for, show the list",top_memory_processes,dev
+show me the ram hogs,top_memory_processes,test
+which app takes the most memory,top_memory_processes,dev
+memory usage by process please,top_memory_processes,test
+what's eating my memory,top_memory_processes,dev
+list the processes using the most memory,top_memory_processes,test
+"my laptop is slow, what's taking up ram",top_memory_processes,dev
+check which apps consume the most ram,top_memory_processes,test
+show high memory processes,top_memory_processes,dev
+which background apps use lots of ram,top_memory_processes,test
+rank running apps by memory,top_memory_processes,dev
+what process has the biggest memory footprint,top_memory_processes,test
+ram hogs right now?,top_memory_processes,dev
+show me memory consumption of running programs,top_memory_processes,test
+top processes by memory,top_memory_processes,dev
+what's filling up my ram,top_memory_processes,test
+how many gigabytes are free on my disk,free_space_summary,dev
+is my hard drive nearly full,free_space_summary,test
+check free storage space left,free_space_summary,dev
+how much space do i have left,free_space_summary,test
+how full is my disk,free_space_summary,dev
+total vs used vs free disk space,free_space_summary,test
+do i have enough space to download a 20gb game,free_space_summary,dev
+whats my remaining storage,free_space_summary,test
+disk capacity and free space please,free_space_summary,dev
+am i running out of storage,free_space_summary,test
+how much room is left on my ssd,free_space_summary,dev
+free space on my drive?,free_space_summary,test
+show disk free summary,free_space_summary,dev
+how many gb remaining on this laptop,free_space_summary,test
+check if my disk is full,free_space_summary,dev
+storage left?,free_space_summary,test
+how much free space on root partition,free_space_summary,dev
+tell me my available disk space,free_space_summary,test
+is there space left on my drive for a big install,free_space_summary,dev
+report used and free storage,free_space_summary,test
+how empty is my disk,free_space_summary,dev
+free disk space check,free_space_summary,test
+how big is my downloads folder,directory_size,dev
+what's the size of the Documents directory,directory_size,test
+how much space does my projects folder take,directory_size,dev
+size of ~/Videos,directory_size,test
+how large is the node_modules folder in my project,directory_size,dev
+check the size of my pictures folder,directory_size,test
+how many gb is my music folder,directory_size,dev
+total size of the zedek folder,directory_size,test
+how heavy is my desktop folder,directory_size,dev
+what's the disk size of /home/user/work,directory_size,test
+how much does the .cache folder weigh,directory_size,dev
+size of the conda env folder,directory_size,test
+measure the size of my photos directory,directory_size,dev
+how big is the downloads dir right now,directory_size,test
+tell me the size of my college folder,directory_size,dev
+how much space is my games folder using,directory_size,test
+what's the total size of ~/Documents/sem5,directory_size,dev
+check how large my backups folder is,directory_size,test
+size of the models directory,directory_size,dev
+how many megabytes is my notes folder,directory_size,test
+how big has my thesis folder gotten,directory_size,dev
+folder size of Documents please,directory_size,test
+my sister's name is priya,remember_fact,dev
+remember that my exam starts on monday,remember_fact,test
+i prefer dark mode in everything,remember_fact,dev
+note that i'm allergic to peanuts,remember_fact,test
+my favourite subject is operating systems,remember_fact,dev
+i always open brave first thing in the morning,remember_fact,test
+keep in mind i wake up at 6am,remember_fact,dev
+my roll number is 21msc045,remember_fact,test
+i'm learning rust this semester,remember_fact,dev
+remember my birthday is in march,remember_fact,test
+i support chennai super kings,remember_fact,dev
+"my laptop has 16gb ram, remember that",remember_fact,test
+i live in a hostel near campus,remember_fact,dev
+"just so you know, i'm vegetarian",remember_fact,test
+i want to get into a product based company,remember_fact,dev
+remember i have a lab on thursdays,remember_fact,test
+my mentor is dr kumar,remember_fact,dev
+i usually code in vs code,remember_fact,test
+store that my github username is devstudent,remember_fact,dev
+my goal this year is to crack gate,remember_fact,test
+i hate early morning classes,remember_fact,dev
+i'm in my third year now,remember_fact,test
+"no, my sister's name is priya not riya",correct_fact,dev
+"that's wrong, i don't study java anymore",correct_fact,test
+"you got it wrong, my exam is on tuesday",correct_fact,dev
+"forget what i said about peanuts, i'm not allergic",correct_fact,test
+"correction: i'm in fourth year, not third",correct_fact,dev
+remove the fact that i live in a hostel,correct_fact,test
+"that's outdated, i moved to a flat",correct_fact,dev
+no i never said i like cricket,correct_fact,test
+delete the wrong info about my mentor,correct_fact,dev
+actually my roll number is 21msc054,correct_fact,test
+you remembered my birthday wrong,correct_fact,dev
+"that isn't true, update it",correct_fact,test
+"i changed my mind, i prefer light mode now",correct_fact,dev
+"wrong, i use neovim not vs code",correct_fact,test
+please fix my college name in memory,correct_fact,dev
+scrap that note about the lab timing,correct_fact,test
+that fact about me is false,correct_fact,dev
+"no, i'm not learning rust, it's go",correct_fact,test
+"update my goal, it's not gate anymore",correct_fact,dev
+"you mixed that up, forget it",correct_fact,test
+"that's incorrect, my department changed",correct_fact,dev
+"not true, remove it from memory",correct_fact,test
+write a python function to reverse a linked list,coding_task,dev
+fix this error: IndexError list index out of range,coding_task,test
+can u code a snake game in pygame,coding_task,dev
+"debug my quicksort, it's returning duplicates",coding_task,test
+build a flask api with a login route,coding_task,dev
+refactor this function to be more readable,coding_task,test
+implement dijkstra in c++,coding_task,dev
+write unit tests for my calculator class,coding_task,test
+make a simple todo app with react,coding_task,dev
+convert this for loop to a list comprehension,coding_task,test
+"my code throws a null pointer exception, help",coding_task,dev
+write a bash script to rename files in bulk,coding_task,test
+create a scraper for product prices,coding_task,dev
+solve two sum in java with a hashmap,coding_task,test
+optimize this sql query,coding_task,dev
+add error handling to my file reader,coding_task,test
+write a regex to validate emails,coding_task,dev
+make a landing page with html and css for a bakery,coding_task,test
+implement a trie with insert and search,coding_task,dev
+help me write a binary search in rust,coding_task,test
+port this javascript to typescript,coding_task,dev
+write code to parse a csv and plot it,coding_task,test
+pause the song,unsupported,dev
+turn up the volume,unsupported,test
+set an alarm for 7am,unsupported,dev
+text mom that i'll be late,unsupported,test
+turn off the bedroom lights,unsupported,dev
+book me an uber to the station,unsupported,test
+skip this track on spotify,unsupported,dev
+close vs code,unsupported,test
+set a timer for 25 minutes,unsupported,dev
+lower the screen brightness,unsupported,test
+order pizza from dominos,unsupported,dev
+call dad,unsupported,test
+kill the chrome app,unsupported,dev
+play lofi music,unsupported,test
+send a whatsapp message to rahul,unsupported,dev
+shut down my laptop,unsupported,test
+turn on the ac,unsupported,dev
+resume the video,unsupported,test
+quit the terminal application,unsupported,dev
+mute my microphone,unsupported,test
+book a movie ticket,unsupported,dev
+stop the music,unsupported,test
+why is python3 using 100% cpu,list_processes_detailed,dev
+"inspect pid 4521, what's it doing",list_processes_detailed,test
+how many threads does chrome have,list_processes_detailed,dev
+why is gnome-shell pegging my cpu,list_processes_detailed,test
+details on the process with id 2210,list_processes_detailed,dev
+what's this background process 'tracker-miner' doing,list_processes_detailed,test
+show cpu and thread info for firefox,list_processes_detailed,dev
+diagnose why ollama is using so much cpu,list_processes_detailed,test
+how long has process 1337 been running,list_processes_detailed,dev
+"why is my fan loud, which process is hammering cpu",list_processes_detailed,test
+check the runtime and threads of code,list_processes_detailed,dev
+what is pid 889 and why is it busy,list_processes_detailed,test
+analyze the java process eating cpu,list_processes_detailed,dev
+is node stuck? it's at full cpu,list_processes_detailed,test
+give me detailed stats for the slack process,list_processes_detailed,dev
+why is kworker using so much cpu,list_processes_detailed,test
+cpu usage breakdown for the docker daemon,list_processes_detailed,dev
+what's process 7788 up to,list_processes_detailed,test
+which thread in chrome is busy,list_processes_detailed,dev
+why does snapd keep spiking the cpu,list_processes_detailed,test
+details about the running pytest process,list_processes_detailed,dev
+investigate high cpu from the tracker process,list_processes_detailed,test
+open vs code,open_application,dev
+launch firefox,open_application,test
+start the terminal,open_application,dev
+open facebook,open_application,test
+fire up spotify,open_application,dev
+open the calculator app,open_application,test
+launch brave browser pls,open_application,dev
+open files,open_application,test
+start libreoffice writer,open_application,dev
+open the settings app,open_application,test
+can you launch obs,open_application,dev
+open gimp,open_application,test
+start the text editor,open_application,dev
+launch the app center,open_application,test
+open vlc player,open_application,dev
+open the trash,open_application,test
+start discord,open_application,dev
+open zoom,open_application,test
+launch the system monitor,open_application,dev
+open thunderbird,open_application,test
+start postman,open_application,dev
+open notion,open_application,test
+what's my battery percentage,system_inspect,dev
+which linux kernel am i on,system_inspect,test
+what cpu does this laptop have,system_inspect,dev
+what's my ip address,system_inspect,test
+how long has my system been up,system_inspect,dev
+how many packages are installed,system_inspect,test
+what gpu do i have,system_inspect,dev
+check my ubuntu version,system_inspect,test
+is my battery charging,system_inspect,dev
+what's my hostname,system_inspect,test
+how many cpu cores do i have,system_inspect,dev
+what's the cpu temperature,system_inspect,test
+which python version is installed,system_inspect,dev
+how much total ram does this machine have,system_inspect,test
+what desktop environment am i using,system_inspect,dev
+is docker installed,system_inspect,test
+what's my wifi network name,system_inspect,dev
+show system uptime,system_inspect,test
+how many apps are installed,system_inspect,dev
+what's the screen resolution,system_inspect,test
+check the kernel release,system_inspect,dev
+what architecture is this machine,system_inspect,test
+find papers on spaced repetition and cite them,research_task,dev
+what does recent research say about sleep and memory,research_task,test
+look up studies on transformer efficiency,research_task,dev
+research the history of the linux kernel with sources,research_task,test
+search arxiv for retrieval augmented generation papers,research_task,dev
+summarize the latest findings on intermittent fasting with citations,research_task,test
+find academic sources on active recall,research_task,dev
+what do studies say about pomodoro technique effectiveness,research_task,test
+look up semantic scholar for graph neural network surveys,research_task,dev
+research how quantum error correction works and cite sources,research_task,test
+find me peer reviewed papers on burnout in students,research_task,dev
+gather sources about the causes of the 2008 financial crisis,research_task,test
+read https://example.com/article and summarize it with citations,research_task,dev
+research best practices for rag evaluation,research_task,test
+look up evidence on caffeine and focus,research_task,dev
+find literature on federated learning privacy,research_task,test
+what does wikipedia and research say about dijkstra's algorithm history,research_task,dev
+research placement interview trends with sources,research_task,test
+find papers comparing bm25 and dense retrieval,research_task,dev
+cite sources on how compilers do register allocation,research_task,test
+look up the research on multitasking and productivity,research_task,dev
+find studies about screen time and eyesight,research_task,test
+log that i solved a dp problem today,academic_tracking,dev
+"i failed the graphs question on leetcode, record it",academic_tracking,test
+what are my weakest topics,academic_tracking,dev
+what should i practice next for placements,academic_tracking,test
+show my dsa progress,academic_tracking,dev
+how's my practice streak going,academic_tracking,test
+record: solved two pointer problem in 20 minutes,academic_tracking,dev
+mark that i got the binary search question partially right,academic_tracking,test
+which topic should i revise before the interview,academic_tracking,dev
+my accuracy on trees so far?,academic_tracking,test
+log a failed attempt on backtracking,academic_tracking,dev
+how many problems have i solved this week,academic_tracking,test
+track that i finished an aptitude test on percentages,academic_tracking,dev
+am i improving at dynamic programming,academic_tracking,test
+show my placement prep summary,academic_tracking,dev
+"i couldn't solve the heap problem, note it down",academic_tracking,test
+what topics haven't i practiced recently,academic_tracking,dev
+give me my weak areas for aptitude,academic_tracking,test
+"log solved: sliding window, medium, 35 min",academic_tracking,dev
+how's my prep looking overall,academic_tracking,test
+which dsa topics am i strongest in,academic_tracking,dev
+record a partial solve on graphs bfs,academic_tracking,test
+open example.com and click the login button,web_task,dev
+fill in the search box on wikipedia.org with black holes,web_task,test
+take a screenshot of github.com,web_task,dev
+go to news.ycombinator.com and click the top story,web_task,test
+type my query into the form on example.org,web_task,dev
+click the sign up link on example.com,web_task,test
+take a screenshot of the homepage of python.org,web_task,dev
+navigate to docs.python.org and press the search button,web_task,test
+fill the contact form on example.net with hello,web_task,dev
+screenshot the page at example.com/pricing,web_task,test
+click 'accept cookies' on that site,web_task,dev
+go to example.com and hit the next page button,web_task,test
+enter 'rust tutorials' in the search field on duckduckgo.com,web_task,dev
+capture a screenshot of my portfolio site,web_task,test
+press the download button on example.com/app,web_task,dev
+click through to the careers page on example.org,web_task,test
+type hello world into the textbox on example.com,web_task,dev
+open the site and click the first result,web_task,test
+take a screenshot of wikipedia.org main page,web_task,dev
+submit the search form on example.com with the word laptop,web_task,test
+click the menu icon on example.com,web_task,dev
+navigate to example.com/login and fill in the username field,web_task,test
+what time is it,mcp_tool,dev
+what's today's date,mcp_tool,test
+count the words in this: the quick brown fox jumps,mcp_tool,dev
+how many words does this paragraph have,mcp_tool,test
+summarize this text for me: lorem ipsum dolor sit amet,mcp_tool,dev
+what's the weather in chennai,mcp_tool,test
+will it rain tomorrow in bangalore,mcp_tool,dev
+show the latest tech news headlines,mcp_tool,test
+what's my codeforces rating for tourist,mcp_tool,dev
+find github repos about vector databases,mcp_tool,test
+give me a 3 day forecast for delhi,mcp_tool,dev
+what day of the week is it,mcp_tool,test
+word count for my essay intro,mcp_tool,dev
+search news about isro,mcp_tool,test
+show upcoming codeforces contests,mcp_tool,dev
+fetch the readme of the pytorch repo,mcp_tool,test
+what's the current time in utc,mcp_tool,dev
+get the codeforces problem 1352C,mcp_tool,test
+how many characters and words in this sentence,mcp_tool,dev
+what's the temperature outside in coimbatore,mcp_tool,test
+find codeforces problems tagged dp rated 1400,mcp_tool,dev
+give me a short summary of this paragraph,mcp_tool,test
+what is a binary tree,general_question,dev
+how do file systems work,general_question,test
+explain what ram is,general_question,dev
+who invented linux,general_question,test
+what's the difference between a process and a thread,general_question,dev
+why is the sky blue,general_question,test
+explain recursion like i'm five,general_question,dev
+what is dynamic programming,general_question,test
+hey how are you doing,general_question,dev
+what's the capital of australia,general_question,test
+can you explain big o notation,general_question,dev
+how does a hash map work internally,general_question,test
+what is an operating system,general_question,dev
+tell me a joke,general_question,test
+what's the meaning of life,general_question,dev
+how does wifi work,general_question,test
+what are you,general_question,dev
+difference between tcp and udp,general_question,test
+how do vaccines work,general_question,dev
+what's a good way to stay focused while studying,general_question,test
+is python compiled or interpreted,general_question,dev
+what does a cpu actually do,general_question,test
