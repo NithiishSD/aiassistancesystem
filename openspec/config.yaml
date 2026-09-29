@@ -1,0 +1,56 @@
+schema: spec-driven
+
+# Shown to every AI tool (Claude Code, Continue, Antigravity) when it creates artifacts.
+# Keep this short: it points at the canonical docs rather than duplicating them.
+context: |
+  Project: Zedek, a single-user, locally-run personal AI assistant (Python 3.12, Linux,
+  conda env `zedek-env`). Owner is a CS student; runs on a laptop CPU, no GPU.
+
+  Read before proposing anything:
+  - ROADMAP.md: the plan (Phases A-F) and the "Deliberately rejected" list. Do not
+    re-propose rejected items without new evidence.
+  - TECH_STACK.md: every component and why it beat the alternative.
+  - COMPLIANCE.md: DPDP / EU AI Act position and the tripwires that change it.
+  - zedek_context.md: history and architecture guidance (being migrated into openspec/specs).
+
+  Architecture: hand-rolled orchestrator (orchestrator.py, no agent framework, by decision);
+  hybrid intent routing (semantic-router embeddings first in classifier.py, LLM tool-calling
+  fallback); ChromaDB memory (memory.py, gated by memory_hygiene.py); cloud-first provider
+  chain in llm_provider.py (Gemini, Groq, NVIDIA NIM, OpenRouter, Cerebras; per-task order in
+  TASK_PROVIDERS) with Ollama local fallback; 7 MCP servers via mcp_client.py; specialist
+  agents (coding_agent, research_agent, web_agent, academic_tracker, wake_word, task_planner,
+  evaluator_agent).
+
+  Non-negotiable safety rules:
+  - Every action passes tier_gate.gate(). Model judgment may RAISE a tier, never lower it.
+  - Tier 3 execution stays disabled.
+  - Confirmation is injected (confirm_fn) and defaults to deny; agents never self-approve.
+  - Untrusted content (web pages, fetched URLs, RAG sources, MCP tool descriptions) must
+    never be read directly by an LLM that chooses actions.
+  - Secrets never go to logs; security code fails closed.
+
+  Owner's priorities: accuracy over speed; local models are backup, not primary; narrow
+  single-responsibility modules; owner reviews every change before it is applied and
+  before it is committed.
+
+rules:
+  proposal:
+    - Reference the ROADMAP.md item this change implements (e.g. "Implements ROADMAP F1").
+    - State the effect on the tier gate, watchdog, and any untrusted-input path, or say "none".
+    - Include a Non-goals section.
+  design:
+    - Prefer stdlib and already-installed packages; justify any new dependency and pin it in requirements.txt.
+    - Adopt patterns, not platforms. No agent frameworks, LiteLLM, or SaaS observability/eval.
+  tasks:
+    - Include writing tests under tests/ for the new behavior.
+    - Include running the full suite (./zedek-env/bin/python -m pytest -q) and require 0 failures.
+    - Where a retrieval or routing change is involved, include measuring it on the eval set (ROADMAP A4) once that exists.
+
+operations:
+  apply:
+    guidance:
+      - Do not commit; the owner reviews the diff and commits.
+      - Report the test count before and after.
+  archive:
+    guidance:
+      - Update ROADMAP.md to tick the implemented item.

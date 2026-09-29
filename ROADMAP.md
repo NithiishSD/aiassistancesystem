@@ -58,9 +58,11 @@ says less. Everything here is about making its outputs trustworthy.*
       salvageable ones in place rather than discarding real information.
 - [x] `tests/test_memory_hygiene.py` — 43 tests, each rejection case drawn from real
       observed corruption.
-- [ ] **Run the cleanup against the live store** (36 rows to delete, 37 to repair).
-      Deliberately not done automatically: deleting the user's stored memories needs
-      their say-so.
+- [x] **Cleanup applied to the live store 2026-09-29** with the owner's go-ahead: 36
+      rows deleted, 37 repaired, and a re-run finds nothing left. Store is now 113
+      personal + 22 academic items. Backup at `chroma_db.backup-20260929-163907/`.
+- [ ] Optional: `python memory_hygiene.py --apply --drop-conversations` removes 36 raw
+      conversation turns persisted before the tiered-memory redesign.
 
 ### A2. Bi-temporal facts — the structural fix
 The contradictory pair in the store (`"...exam next week"` + `"...exam next week: false"`)
@@ -375,7 +377,7 @@ that is lost.
       "post-rationalized", meaning the model answers from memory and then cites something
       that looks like a match. **CPU latency is unpublished, so benchmark it first.**
 
-### Process decision: OpenSpec (proposed, not yet installed)
+### Process decision: OpenSpec ✅ ADOPTED 2026-09-29
 Spec-driven change management for AI coding tools (MIT, ~70k stars; works with Claude
 Code, Continue, Gemini/Antigravity, Cursor). Changes go through
 propose → review → apply → archive. Fits the stated rule that every change is reviewed
@@ -387,7 +389,15 @@ before it happens, and gives every AI tool used on this repo one shared plan for
 - No backfilling specs for all 28 modules. A spec is written only when a change touches
   that capability.
 - Turn off its default-on telemetry. Requires Node ≥ 20.19 (installed: 20.20.2).
-- First two changes: A3 and B1.
+- Installed (v1.13.2) and initialized for Claude Code, Continue, and Antigravity; project
+  context and rules are set in `openspec/config.yaml`. Telemetry confirmed off.
+- First two changes, both proposed and validated, **awaiting review**:
+  `openspec/changes/add-memory-reranker` (F1, absorbs A3) and
+  `openspec/changes/quarantine-web-observations` (B1, plus the shared sanitizer from B6).
+- **Why A3 was folded into F1:** after the cleanup, the correct answer to "what college
+  do I study at" comes back at L2 distance **1.06**. A fixed 1.0 cutoff everywhere would
+  have dropped the right fact, which is direct evidence that distance thresholds are
+  the wrong gate.
 
 ---
 

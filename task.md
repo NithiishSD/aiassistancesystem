@@ -1,3 +1,17 @@
+# ⚠️ Superseded by OpenSpec (2026-09-29)
+
+Active work is now tracked as OpenSpec changes, not in this file:
+
+    openspec list                 # open changes and task progress
+    openspec show <change>        # read a proposal
+    /opsx:apply <change>          # implement an approved change (Claude Code)
+    /opsx-apply <change>          # same, in Continue / Antigravity
+
+The plan itself is ROADMAP.md. This file is kept as the history of Items 1-14 and the
+2026-09-29 hardening pass.
+
+---
+
 # Current task: Production-hardening pass (ROADMAP.md Phases A–E)
 
 Items 1–14 are complete (history below). The active plan is now **[`ROADMAP.md`](ROADMAP.md)**,
