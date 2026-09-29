@@ -54,9 +54,10 @@ from scratch.
 | Evaluator | `evaluator_agent.py` | Three pillars: static/AST + sandboxed dynamic + a different-model LLM review. |
 | Task planner | `task_planner.py` | Regex gate before the LLM call; biased toward false negatives. |
 | Research / RAG | `research_agent.py` | Read-only tool allowlist; gated tools are skipped, never auto-approved; **zero sources ⇒ refuses to answer**. |
-| Web / browser | `web_agent.py` | Tier-2 confirmation is *injected*; default callback denies. ⚠️ Planner currently ingests raw page text — Roadmap B1. |
+| Web / browser | `web_agent.py` | Tier-2 confirmation is *injected*; default callback denies. The planner never sees page text: a tool-less extractor returns validated typed fields, page-proposed URLs are limited to the user's domains, typed text must come from the user's request, and every confirmation shows whether each target came from the user or from the page (B1). |
 | Academic tracker | `academic_tracker.py` | Own structured JSON store — aggregation queries, not semantic similarity. |
 | Wake-word | `wake_word.py` | **Q&A-only**; no path from a spoken utterance to `execute()`. |
+| Untrusted text | `text_sanitizer.py` | Strips zero-width and bidi-control characters before any model reads web text. Used by the web agent; research agent and MCP descriptions are pending (B6). |
 | Security | `security_module.py` | Vault, password gate, rotating single-use confirmation word, voice-print. |
 
 ## Planned additions (ROADMAP Phase F)

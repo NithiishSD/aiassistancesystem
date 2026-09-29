@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 import web_agent
-from web_agent import WebAgent, BrowseReport, Step
+from web_agent import WebAgent, BrowseReport, Extraction, Step, Target
 
 
 class _FakeToolSpec:
@@ -57,7 +57,7 @@ class TestDefaultConfirmation:
     def test_browse_without_confirm_fn_never_executes(self):
         """The default (deny) callback must prevent any tool execution."""
         agent = WebAgent(max_steps=2)
-        decision = {"tool": "navigate", "args": {"url": "https://example.com"}, "done": False, "reason": ""}
+        decision = {"tool": "navigate", "target": "T1", "selector": None, "text": None, "done": False, "reason": ""}
 
         with patch.object(WebAgent, "decide_next_action", return_value=decision), \
              patch("web_agent.mcp_client.get_tool_registry", return_value=_ALL_BROWSER_TOOLS), \
@@ -148,11 +148,12 @@ class TestDecideNextAction:
             decision = self.agent.decide_next_action("goal", [])
         assert decision["done"] is True
 
-    def test_malformed_args_coerced_to_empty_dict(self):
-        payload = {"tool": "navigate", "args": "not-an-object", "done": False}
+    def test_malformed_ids_coerced_to_none(self):
+        payload = {"tool": "navigate", "target": {"not": "a string"}, "selector": 7, "done": False}
         with patch("web_agent.llm_provider.generate_chat", return_value={"answer": json.dumps(payload), "source": "x"}):
-            decision = self.agent.decide_next_action("goal", [])
-        assert decision["args"] == {}
+            decision = self.agent.decide_next_action("go to example.com", [])
+        assert decision["target"] is None
+        assert decision["selector"] is None
 
 
 class TestBrowseLoop:
@@ -164,32 +165,33 @@ class TestBrowseLoop:
         agent = WebAgent(max_steps=3)
         with patch.object(WebAgent, "decide_next_action", return_value={"tool": "", "args": {}, "done": True, "reason": "already satisfied"}), \
              patch.object(WebAgent, "execute_action") as mock_exec:
-            report = agent.browse("some goal")
+            report = agent.browse("check example.com")
         mock_exec.assert_not_called()
         assert "already satisfied" in report.notes
 
     def test_denied_step_stops_the_loop(self):
         agent = WebAgent(max_steps=4)
-        decision = {"tool": "click", "args": {"url": "https://a.com", "selector": "#x"}, "done": False, "reason": ""}
-        denied = Step(index=1, tool="click", args={}, status="denied", reason="You declined this browser action.")
+        decision = {"tool": "navigate", "target": "T1", "selector": None, "text": None, "done": False, "reason": ""}
+        denied = Step(index=1, tool="navigate", args={}, status="denied", reason="You declined this browser action.")
 
         with patch.object(WebAgent, "decide_next_action", return_value=decision), \
              patch.object(WebAgent, "execute_action", return_value=denied) as mock_exec, \
              patch.object(WebAgent, "summarize", return_value="stopped"):
-            report = agent.browse("click something")
+            report = agent.browse("open example.com and click something")
 
         assert mock_exec.call_count == 1
         assert report.completed is False
 
     def test_step_budget_is_enforced(self):
         agent = WebAgent(max_steps=2)
-        decision = {"tool": "navigate", "args": {"url": "https://a.com"}, "done": False, "reason": ""}
-        ok_step = Step(index=1, tool="navigate", args={}, status="ok", observation="loaded")
+        decision = {"tool": "navigate", "target": "T1", "selector": None, "text": None, "done": False, "reason": ""}
+        ok_step = Step(index=1, tool="navigate", args={"url": "https://example.com"}, status="ok", observation="loaded")
 
         with patch.object(WebAgent, "decide_next_action", return_value=decision), \
              patch.object(WebAgent, "execute_action", return_value=ok_step) as mock_exec, \
+             patch.object(WebAgent, "extract", return_value=None), \
              patch.object(WebAgent, "summarize", return_value="done"):
-            report = agent.browse("keep going")
+            report = agent.browse("keep going on example.com")
 
         assert mock_exec.call_count == 2
         assert any("limit" in n for n in report.notes)
@@ -200,17 +202,20 @@ class TestSummarize:
         summary = WebAgent().summarize("goal", [Step(index=1, tool="navigate", args={}, status="denied")])
         assert "wasn't able" in summary.lower() or "nothing was submitted" in summary.lower()
 
-    def test_summary_uses_observations(self):
-        steps = [Step(index=1, tool="get_text", args={"url": "https://a.com"}, status="ok", observation="Hello world")]
+    def test_summary_uses_excerpts(self):
+        steps = [Step(index=1, tool="get_text", args={"url": "https://a.com"}, status="ok",
+                      observation="raw page text", extraction=Extraction(True, None, None, "Hello world"))]
         with patch("web_agent.llm_provider.generate_chat", return_value={"answer": "The page says hello world.", "source": "gemini"}):
             summary = WebAgent().summarize("what does the page say", steps)
         assert "hello world" in summary.lower()
 
-    def test_provider_failure_returns_raw_observations(self):
-        steps = [Step(index=1, tool="get_text", args={"url": "https://a.com"}, status="ok", observation="Raw page text")]
+    def test_provider_failure_returns_excerpts(self):
+        steps = [Step(index=1, tool="get_text", args={"url": "https://a.com"}, status="ok",
+                      observation="raw page text", extraction=Extraction(True, None, None, "Excerpt text"))]
         with patch("web_agent.llm_provider.generate_chat", side_effect=RuntimeError("down")):
             summary = WebAgent().summarize("goal", steps)
-        assert "Raw page text" in summary
+        assert "Excerpt text" in summary
+        assert "raw page text" not in summary
 
 
 class TestFormatting:

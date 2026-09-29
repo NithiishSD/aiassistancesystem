@@ -804,6 +804,8 @@ Worth recording, because it argues against churn:
 In priority order (details and rationale in ROADMAP.md):
 1. **Prompt-injection hole in `web_agent`** — the planner reads raw page text and then
    chooses the next tool. Verified in code (`web_agent.py:150`). → B1
+   **→ FIXED 2026-09-29** (OpenSpec change `quarantine-web-observations`): the planner never
+   sees page text, and page-influenced URLs, selectors, and typed text are constrained in code.
 2. **MCP descriptions trusted** in the selection prompt and the tier gate. Verified in
    code (`orchestrator.py:521`, `tier_gate.py:151`). → B2
 3. **No routing evaluation** despite routing being the historical failure point. → A4
