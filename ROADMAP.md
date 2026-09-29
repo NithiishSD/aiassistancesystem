@@ -1,7 +1,11 @@
 # Zedek — Roadmap
 
-**Last revised:** 2026-09-29, after an external research pass (agent architectures,
-security/compliance, production engineering) and a live audit of the running system.
+**Last revised:** 2026-09-29, twice:
+1. An external research pass (agent architectures, security/compliance, production
+   engineering) plus a live audit of the running system → Phases A–E.
+2. A survey of 13 open-source assistants plus RAG-quality and efficiency research →
+   Phase F, and changes to A3, A4, C2, D1, D2, E1. Full cited report:
+   [`reports/Open source assistant improvements.md`](reports/Open%20source%20assistant%20improvements.md).
 
 This file supersedes `buildingroadmap.txt`, which was a running chat log rather than a
 plan. That file is kept for history; this one is the plan.
@@ -70,7 +74,9 @@ is not a coding slip; there is no representation for *"this fact stopped being t
 ### A3. Relevance threshold everywhere
 `research_agent` now filters memory at distance 1.0 (measured: real matches ~0.5–0.7,
 junk ~1.4–2.0). `answer_general_question()` still injects top-3 unconditionally.
-- [ ] Apply the same threshold there. ~3 lines.
+- [ ] Apply the same threshold there. ~3 lines. Do this now as a stopgap.
+- **Superseded long-term by F1.** A raw L2 cutoff shifts with query length and phrasing.
+  The reranker score from F1 is the proper relevance gate and replaces the 1.0 cutoff.
 
 ### A4. Routing evaluation harness
 Routing is the historical failure point and is completely unmeasured. ~16 intents and 27
@@ -83,6 +89,13 @@ collapses as tool count grows.
       class-level failures that matter.
 - [ ] CI gate: fail if any class drops >2 points precision against baseline.
 - [ ] Promote real misroutes into the set as they happen (~10 min/week).
+- [ ] **"Must stay local" list.** Utterances the classifier must never send to the LLM
+      fallback. Home Assistant shipped a regression (issue #139415) that sent every
+      command to the LLM. A test list like this would have caught it.
+- [ ] **Retrieval eval set: 30–50 real queries with the facts or sources they should
+      retrieve.** This is step 0 for all of Phase F. Nobody has published a benchmark on
+      a single user's few hundred short facts, so the reranker threshold, the embedding
+      choice, and whether an NLI check pays off all have to be measured here.
 - **No platform.** pytest + sklearn, both already present. DeepEval later *if* it hurts.
 
 ### A5. Confidence calibration
@@ -142,6 +155,20 @@ Lower risk than B1 (the output is text to the user, with no subsequent tool call
 crafted page could still induce a malicious link.
 - [ ] Strip or mark links in synthesized answers that don't appear in the source list.
 
+### B6. Invisible-Unicode sanitizer and LLM-declared risk
+Block's red team got code execution on employee laptops through its own Goose agent.
+The payload was **zero-width Unicode instructions hidden in calendar invites and shared
+workflow files**. The user saw nothing and the model read everything.
+- [ ] A ~20-line sanitizer that strips zero-width and bidi-control characters from all
+      untrusted text (web pages, fetched URLs, RAG sources, tool descriptions) before any
+      LLM sees it. Goes in `web_agent.py`, `research_agent.py`, and the MCP registration path.
+- [ ] OpenHands-style risk label: the LLM states LOW/MEDIUM/HIGH inside the tool call,
+      at no extra inference cost. The effective tier is `max(rule tier, LLM risk)`, so the
+      model can raise a tier but never lower it. That fits the tier gate's
+      existing "lanes only raise" design.
+- [ ] Reject-with-feedback: a denied action goes back to the agent with the user's reason,
+      instead of ending the loop with no explanation.
+
 ---
 
 ## Phase C — Observability and cost
@@ -160,6 +187,12 @@ to tell whether an answer came from Gemini or the local 8B. That's an invisible 
 - [ ] Cooldown after 429 so an exhausted provider isn't hammered.
 - [ ] Keep the fallback chain **bounded** — unbounded chains cause cascading retry storms
       when every provider 429s at once.
+- [ ] **Move OpenRouter off the head of `process_reasoning`.** OpenRouter's `:free` tier
+      allows **50 requests/day** (1,000 only after buying $10 of credit), which is verified
+      against its docs. Yet `TASK_PROVIDERS["process_reasoning"]` lists it first, so the
+      most quota-scarce provider gets hit first. Order chains by quota headroom, not habit.
+- [ ] Read rate-limit headers and skip providers that are expected to be exhausted,
+      instead of calling them to find out.
 - **Don't swap in LiteLLM.** The existing chain works and is tested; port the ideas.
 
 ---
@@ -171,12 +204,23 @@ Today Zedek only reacts. The academic tracker and memory already hold everything
 > "You haven't touched graphs in 12 days and you're at 40% there. Your DS exam is next
 > week — want three problems?"
 - [ ] Daily digest job surfacing stale topics, weak areas, and upcoming commitments.
+- Scheduled prompts are now standard across the field: Open WebUI Automations, LibreChat
+  Scheduled Chats, Khoj automations, AnythingLLM Scheduled Jobs. Implement with
+  APScheduler + SQLite (1–2 days). The digest itself is a stored prompt run on a cron,
+  so it goes through the normal pipeline and tier gate.
 
 ### D2. Streaming and progress feedback
 Fully blocking today; a 12-second cloud call is indistinguishable from a hang. Accuracy
 over speed is the right call, but *perceived* responsiveness is a separate axis and costs
 no accuracy.
 - [ ] Token streaming (`stream=True`) + a thinking indicator.
+- [ ] **In the voice path, split the stream at sentence boundaries and send each sentence
+      to TTS as it arrives.** Home Assistant measured time-to-speech falling from
+      **6.62 s → 0.51 s (cloud TTS) and 5.31 s → 0.56 s (local Piper)** (project-reported).
+      This is the single biggest perceived-latency win found, and it uses no extra quota.
+- Hedged requests (firing a backup provider after ~p95 latency) belong on voice turns
+  only, and only once calls are non-blocking. With blocking `requests`, an abandoned call
+  still burns quota.
 
 ### D3. Local model refresh
 - [ ] `llama3.1:8b` → **Qwen3 8B**: same footprint, materially better instruction-following
@@ -204,9 +248,146 @@ Adding a capability today means editing four files in sync — `classifier.py`,
 times in a single session; a consistency test caught each one. A single `CAPABILITIES`
 definition that all four derive from removes the entire bug class.
 
+**Concrete design, borrowed from OpenClaw and Open Interpreter.** Both now define a
+capability as a folder containing a `SKILL.md` with a small metadata header:
+- [ ] One folder per capability: `capability.yaml` (name, description, router
+      utterances, tier, input schema, required binaries/env vars) plus `handler.py`.
+- [ ] One loader generates the `classifier.py` routes, the `classifier_tools.py`
+      entries, the `tier_gate.py` table, the dispatch, and the help text.
+- [ ] Skip a capability at load time when its requirements are missing. That replaces
+      today's scattered `available()` probes.
+- [ ] Only name + description go into any LLM prompt, within a fixed budget. OpenClaw
+      spends about 24 tokens per skill and drops descriptions first when over budget.
+- [ ] The `input schema` field also feeds F2's structured-output adapter.
+- Effort: 3–5 days to migrate everything. **Do not copy OpenClaw's public skill
+  registry.** It had 1,184+ malicious skills. Capabilities stay local, reviewed code.
+
 ### E2. Typed state between pipeline steps
 Replace the free-form `dict` flowing through `route_request → execute` with a dataclass.
 This is the one genuinely useful idea to borrow from LangGraph — as a pattern, not a dependency.
+
+---
+
+## Phase F — Answer quality and efficiency
+
+*Source: survey of 13 open-source assistants plus RAG and efficiency research,
+2026-09-29 ([full report](reports/Open%20source%20assistant%20improvements.md)). The
+headline finding: **at Zedek's scale, neither the model nor the framework is the
+bottleneck. The weak point is what the LLM gets to see.** That means three dense facts
+behind a hand-tuned cutoff, or six research pages cut off at 4,000 characters. On top of
+that, requests are lost to malformed JSON and exhausted providers. All of the fixes below
+run on CPU.*
+
+**Step 0 is the retrieval eval set in A4.** Almost every gain number below was measured
+on 10k+ document corpora, reported by vendors, or measured on GPUs. Keep a change only if
+it improves Zedek's own eval set.
+
+### F1. Cross-encoder reranker ⭐ best value per hour
+- [ ] Retrieve 15–20 candidates instead of 3, rerank with a small cross-encoder
+      (FlashRank `ms-marco-MiniLM-L-12-v2`, ~4 MB, or `bge-reranker-base`), keep the top 3.
+- [ ] Replace the L2 ≤ 1.0 cutoff with a **reranker-score threshold** tuned on the eval set.
+- Evidence: an independent Jan-2026 CPU benchmark measured **+31 ms mean, ~0.3% of
+  end-to-end time**. Anthropic (vendor) reports reranking on top of hybrid search cut top-20
+  retrieval failures by 67%. A Sept-2026 academic study used bge-reranker-base as its
+  "strong baseline" default.
+- Touches: `memory.retrieve()`, the memory gate in `research_agent.py`, the fact lookups
+  in `orchestrator.py`. Effort: 0.5–1 day.
+
+### F2. Schema-constrained JSON on every provider
+Today `llm_provider.py` only asks for "some JSON" (`json_object`, `responseMimeType`,
+Ollama `format: "json"`): valid syntax, no schema.
+- [ ] A Pydantic model per structured task (arg extraction, fact canonicalization,
+      query planning, intent fallback).
+- [ ] A hand-written `schema_for(provider, Model)` adapter for each provider's native mode:
+      Gemini JSON-schema output; Groq `strict: true` (GPT-OSS models only); NVIDIA NIM
+      `guided_json` via `extra_body`; Ollama `format=<schema>`.
+- [ ] Validate with Pydantic, **re-ask once** with the validation error, then move to the
+      next provider.
+- [ ] Intent fallback uses a single-field enum schema. That's the cheapest and most
+      reliable form, because provider schema coverage drops sharply as schemas grow.
+- Evidence (independent): 0.6B–4B models go from 7–21% schema-invalid output to 0%.
+  JSONSchemaBench found constrained decoding also *raised* accuracy by up to ~4 points.
+- Touches: `generate_chat()`, `_openai_compatible`, `_gemini`, `_local`, and the classifier's
+  LLM fallback. Effort: 1–1.5 days. **No Instructor/Outlines** (see rejections).
+
+### F3. BM25 + reciprocal-rank-fusion hybrid search
+- [ ] An in-memory `bm25s` index beside Chroma, merged with dense results by RRF (~10
+      lines). This fixes exact-token misses such as course codes, roll numbers, and names.
+- **Local ChromaDB cannot do this natively.** Its sparse/BM25 support is Cloud-only.
+  Verified: local raises "Sparse vector indexing is not enabled in local" (chroma #6185).
+- RRF discards absolute scores, which is why F1's reranker threshold is required.
+- Evidence (independent, large corpus): up to +8.1pp Recall@5 over either method alone.
+  bm25s is 100–500× faster than rank_bm25. Touches `memory.store()` / `retrieve()`. 0.5–1 day.
+
+### F4. Chunk research pages instead of truncating them
+`research_agent.gather()` keeps each source's first 4,000 characters, so anything past
+that is lost.
+- [ ] Recursive ~250-token chunks (MiniLM truncates at 256 word-pieces), each prefixed
+      with "title — section". Rerank all chunks against the question and send only the
+      best to `synthesize()`.
+- Evidence: plain chunking matches semantic chunking (NAACL 2025), and the free title
+  prefix did well in a 2026 comparison of eight methods. Better sources, smaller prompts. 1 day.
+
+### F5. Static-first prompts + exact-match cache
+- [ ] Put the system prompt, schema, and few-shot examples **byte-identical and first**,
+      then timestamps, memory, and the user query **last**, so provider prefix caches can
+      hit. Cerebras and Groq don't count cached tokens against rate limits. Gemini's implicit
+      cache needs 2,048–4,096-token prefixes, so short extraction prompts will mostly miss it.
+- [ ] SQLite exact-match hash cache for deterministic sub-tasks only, such as fact
+      canonicalization and argument extraction. **Never** cache anything touching memory,
+      time, calendar, or the web. Effort: 0.5 day.
+
+### F6. Core memory blocks (Letta / OpenClaw pattern)
+- [ ] A `user_profile` block (1–2k characters: name, college, courses, target companies)
+      kept **always in the prompt**, stored as git-tracked markdown so every change is
+      diffable and revertible.
+- The bi-temporal store (A2) stays the system of record. The block removes retrieval
+  misses for the most-used facts. Anthropic advises that knowledge under 200k tokens can
+  go straight into the prompt, and Zedek's facts are far below that. 1–2 days. *Benefit
+  over pure RAG is unmeasured, so check it on the eval set.*
+
+### F7. Embedding model upgrade (decide with the eval set)
+- [ ] Memory: `snowflake-arctic-embed-s` (51.98 MTEB retrieval nDCG@10) or
+      `bge-small-en-v1.5` (51.68). Both are 384-dim like MiniLM, so storage size doesn't
+      change. Requires a re-embed and a query prefix. Scores are self-reported on model cards.
+- [ ] Router: `model2vec` `potion-base-8M` is up to 500× faster on CPU at ~92% of MiniLM's
+      MTEB average. It's a candidate for `classifier.py` only, never for memory. Accept it
+      only if routing accuracy holds in A4.
+
+### F8. Condenser + stuck detection
+- [ ] At ~70% of the smallest provider's context window, summarize the middle of the
+      session locally, keeping the start and recent tail. Before that, run OpenClaw's
+      silent "save anything durable" turn. OpenHands (project-reported) halved per-turn cost
+      with no loss in solve rate (54% vs 53%).
+- [ ] Watchdog flags repeated identical tool calls or error→retry cycles and stops to ask
+      the user. Effort: 2–3 days.
+
+### F9. Two-tier voice recognition
+- [ ] A second Vosk recognizer restricted to a **grammar generated from the router's
+      utterances** for commands (HA's Speech-to-Phrase: ~150 ms), keeping the free-form
+      recognizer for Q&A. Pass recently handled local turns to the LLM so follow-ups work.
+      Effort: 1.5–2.5 days. HA itself says the closed-vocabulary approach is "not for LLMs"
+      open Q&A, hence two tiers.
+
+### F10. Local citation check (measure before adopting)
+- [ ] A small NLI model (MiniCheck, ~0.4B) checks each `[S#]` sentence against its source
+      locally, with no LLM call. Motivation: up to 57% of RAG citations are
+      "post-rationalized", meaning the model answers from memory and then cites something
+      that looks like a match. **CPU latency is unpublished, so benchmark it first.**
+
+### Process decision: OpenSpec (proposed, not yet installed)
+Spec-driven change management for AI coding tools (MIT, ~70k stars; works with Claude
+Code, Continue, Gemini/Antigravity, Cursor). Changes go through
+propose → review → apply → archive. Fits the stated rule that every change is reviewed
+before it happens, and gives every AI tool used on this repo one shared plan format.
+- Adopt it **as a replacement, not an addition**. ROADMAP.md stays as the high-level
+  plan. `task.md` is retired in favor of `openspec/changes/`. `zedek_context.md` shrinks
+  over time as current truth moves into `openspec/specs/` and history into
+  `openspec/archive/`.
+- No backfilling specs for all 28 modules. A spec is written only when a change touches
+  that capability.
+- Turn off its default-on telemetry. Requires Node ≥ 20.19 (installed: 20.20.2).
+- First two changes: A3 and B1.
 
 ---
 
@@ -228,15 +409,53 @@ Recording these so they don't get relitigated:
   LLM layer covering exactly the out-of-distribution weakness embeddings have.
 - **Tier 3 execution.** Stays off. The framework is built and tested for when that changes.
 
+*Added from the Phase F research:*
+- **LLM-generated contextual retrieval (Anthropic-style).** Built for long chunked
+  documents. Zedek's facts are already self-contained, and an independent 2026 study found
+  it slow, costly, and not consistently better. The free title prefix (F4) gets most of it.
+- **Semantic or late chunking.** No consistent gain over plain token chunking; late
+  chunking did poorly at scale.
+- **HyDE / multi-query on personal memory.** Inventing "hypothetical" user facts pulls in
+  wrong memories. A 5-method ensemble *hurt* AmbigNQ by 2.49pp, and each method costs a
+  call. Only rewrite queries in the research agent, and only when confidence is low.
+- **Self-RAG, multi-round reflection, full CRAG.** Self-RAG needs a fine-tuned generator,
+  which isn't possible with cloud APIs. CRAG's independently reproduced gain is only
+  +0.4–3.0pp, and its evaluator mostly keys on named-entity overlap, which the F1 reranker
+  already captures.
+- **Semantic response cache (GPTCache-style).** 5–15% hit rate on conversational
+  traffic, and a single user's answers depend on personal state and time, so it would
+  serve confidently stale answers. Exact-match caching only (F5).
+- **Always-parallel fan-out or speculative generation.** Doubles quota burn on budgets as
+  small as 50 requests/day.
+- **RouteLLM / learned routers.** Built for cost gaps between paid models. Ordering by
+  quota plus escalating on validation failure (C2, F2) captures the value here.
+- **Instructor / Outlines.** Instructor brings SDK clients, which goes against the
+  no-LiteLLM decision. Ollama's `format` already does grammar-constrained decoding
+  locally, so Outlines adds nothing.
+- **Large rerankers first (bge-reranker-v2-m3, mxbai-v2).** Only GPU latency is
+  published. Start small (F1) and move up only if the eval set shows a gap.
+- **OpenClaw's skill registry, network gateway, and messaging bridges.** 1,184+ malicious
+  skills found on its registry; CVE-2026-25253 gave remote code execution through its
+  localhost WebSocket gateway, which had no Origin check. When Chainlit (D4) opens a port,
+  bind to 127.0.0.1 and check Origin.
+- **Enterprise/multi-user features.** RBAC/SSO, many vector-DB backends, visual flow
+  builders, OVOS MessageBus/HiveMind, the Letta server/Postgres stack. Built for many
+  users on many machines; Zedek is one user, one process.
+
 ---
 
 ## Suggested order
 
 1. **A1 cleanup run** — one command, immediately improves every answer.
-2. **A3** — three lines, same class of win.
-3. **B1** — the one live architectural hole.
-4. **A4** — protects the historical weak point before adding more capabilities.
-5. **C1 + C2** — half a day each, unlocks everything downstream.
-6. **D3** — 30 minutes, measurable gain.
-7. **D1/D2** — the features that change how it *feels*.
-8. **E1** — do before the next big capability push, not after.
+2. **A3** — three lines, stopgap until F1.
+3. **B1 + B6 sanitizer** — the one live architectural hole, plus its cheapest hardening.
+4. **A4 including the retrieval eval set**. Every item in Phase F is measured against it.
+5. **C2 quota fixes**. Move OpenRouter off the head of `process_reasoning`. It takes minutes.
+6. **F1 → F2 → F3 → F4**. About 4–5 working days total. These are the biggest direct
+   answer-quality gains found.
+7. **D2 streaming + D3 Qwen3 + F5 prompt order**. Speed and quota.
+8. **C1 tracing**.
+9. **E1 capability manifests**. Do it before the next big capability push, not after.
+10. **F6–F10, D1, D4**. Structural work, scheduled once the first batch shows measured gains.
+
+If OpenSpec is adopted, each numbered step above becomes one `openspec/changes/` proposal.

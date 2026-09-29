@@ -20,3 +20,6 @@ data/dynamic_utterances.json
 data/secure/
 data/academic_progress.json
 logs/watchdog_audit.jsonl
+
+# Raw research notes (the synthesized report in reports/ is committed)
+research_notes/

@@ -20,6 +20,9 @@ produced from an external research pass + live system audit on 2026-09-29.
 - [ ] **C1/C2** — `trace_id` per turn, `gen_ai.*` log fields, per-provider counters
 - [ ] **D3** — swap local fallback to Qwen3 8B, re-run evals
 - [ ] **D1/D2** — proactive daily digest; token streaming
+- [ ] **Phase F** (from the open-source survey) — F1 reranker → F2 schema JSON → F3 BM25 hybrid → F4 page chunking.
+      See ROADMAP.md "Suggested order" and `reports/Open source assistant improvements.md`.
+- [ ] **Decide on OpenSpec** — proposed as a replacement for this file; not yet installed.
 
 Still open from before:
 - [ ] Wake-word loop against LIVE SPEECH — needs you to run it and talk

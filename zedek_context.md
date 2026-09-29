@@ -753,6 +753,14 @@ outputs now live in dedicated files — **read these before planning new work**:
 - [`ROADMAP.md`](ROADMAP.md) — the plan. Supersedes `buildingroadmap.txt` (kept as history).
 - [`TECH_STACK.md`](TECH_STACK.md) — every component with *why it was chosen over the alternative*.
 - [`COMPLIANCE.md`](COMPLIANCE.md) — DPDP / EU AI Act position and the tripwires that change it.
+- [`reports/Open source assistant improvements.md`](reports/Open%20source%20assistant%20improvements.md) —
+  a second, cited survey of 13 open-source assistants (Open WebUI, Home Assistant Assist,
+  OpenHands, Letta, OpenClaw, Goose, …) plus RAG-quality and efficiency research. It
+  became ROADMAP **Phase F**. Headline finding: at Zedek's scale the bottleneck is
+  *retrieval* (3 dense facts behind a fixed L2 cutoff; research pages cut off at 4k
+  characters) and *wasted quota* (schema-less JSON; OpenRouter's 50-requests/day tier
+  sitting first in `process_reasoning`). It is not the model or the framework.
+  Best-value fix: a CPU cross-encoder reranker (+31 ms measured).
 
 ### What the audit found in the live system
 

@@ -58,6 +58,33 @@ from scratch.
 | Wake-word | `wake_word.py` | **Q&A-only**; no path from a spoken utterance to `execute()`. |
 | Security | `security_module.py` | Vault, password gate, rotating single-use confirmation word, voice-print. |
 
+## Planned additions (ROADMAP Phase F)
+
+Chosen from the 2026-09-29 open-source survey. Each needs to pass the retrieval eval set
+before it's adopted.
+
+| Concern | Planned choice | Why this, not the alternative |
+|---|---|---|
+| Reranking | FlashRank `ms-marco-MiniLM-L-12-v2` (~4 MB) or `bge-reranker-base`, CPU | Measured +31 ms on CPU (independent). Larger rerankers (bge-v2-m3, mxbai-v2) only have GPU latency published, so we start small. |
+| Keyword search | `bm25s` in-memory index + reciprocal rank fusion beside ChromaDB | **Local ChromaDB has no sparse/BM25 search**. That's Cloud-only (verified, chroma #6185). bm25s is 100–500× faster than rank_bm25. |
+| Relevance gate | Reranker score threshold | Replaces the hand-tuned L2 ≤ 1.0 cutoff, which shifts with query length and phrasing. |
+| Structured output | Pydantic models + hand-written per-provider schema adapter + one re-ask | Every provider in the chain has a native schema mode. Instructor would pull in SDK clients, against the no-LiteLLM decision, and Outlines adds nothing over Ollama's `format`. |
+| Caching | Static-first prompt layout (for provider prefix caches) + SQLite exact-match cache for deterministic sub-tasks | Semantic caches hit 5–15% on conversation and serve stale personal answers. |
+| Memory embeddings | `snowflake-arctic-embed-s` or `bge-small-en-v1.5` (both 384-dim) | Same size as MiniLM, better retrieval (self-reported). The eval set decides. |
+| Router embeddings (candidate) | `model2vec` `potion-base-8M` | Up to 500× faster on CPU. Router only, never memory. Accepted only if routing accuracy holds. |
+| Core memory | Always-in-prompt `user_profile` block as git-tracked markdown | Letta/OpenClaw pattern: no retrieval miss on the most-used facts, and every learned change is diffable. |
+| Scheduling | APScheduler + SQLite | For the proactive digest. Scheduled prompts are now standard across Open WebUI, LibreChat, Khoj, and AnythingLLM. |
+| Voice latency | Sentence-split streaming into TTS; grammar-limited Vosk recognizer for commands | Home Assistant measured 5–6 s → ~0.5 s time-to-speech, and ~150 ms command recognition. |
+| Citation check (maybe) | MiniCheck ~0.4B NLI model, local | Catches "post-rationalized" citations with no LLM call. CPU latency is unpublished, so benchmark it first. |
+
+Full evidence and rejected alternatives: [`reports/Open source assistant improvements.md`](reports/Open%20source%20assistant%20improvements.md).
+
+## Development process
+
+| Concern | Choice | Status |
+|---|---|---|
+| Change management | **OpenSpec** (spec-driven: propose → review → apply → archive) | Proposed; not yet installed. It would replace `task.md` and gradually slim `zedek_context.md`. Telemetry to be disabled. Needs Node ≥ 20.19 (installed: 20.20.2). |
+
 ## Dependency policy
 
 1. **Prefer stdlib and what's already installed.** Nearly every roadmap item is
