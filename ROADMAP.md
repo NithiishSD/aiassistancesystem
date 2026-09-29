@@ -95,6 +95,8 @@ as substrings, so "type…", "…capacity…", "facebook", and "book…" never r
 *Acknowledgement-guard fix (OpenSpec `fix-acknowledgement-guard`): one whole-word check shared by the orchestrator and the classifier. The orchestrator had its own buggy copy that the eval could not see. End to end, **7/9 formerly swallowed requests now route correctly (was 0/9)**. Offline, only `general_question` precision moves (0.917 → 1.000), because the gated eval scores "sent to the LLM" the same as "dropped".*
 - [ ] Follow-up: tests rewrite the real `data/dynamic_utterances.json` (importing `orchestrator` runs `register_mcp_tools()`). The contents are idempotent, but tests must not write user data.
 - [ ] Follow-up: "port" in `AMBIGUOUS_TERMS` makes "port this javascript to typescript" stop for a clarifying question.
+*Layer-1 coverage (OpenSpec `improve-layer1-coverage`), researched and then measured on the held-out test slice: short example phrases, a general-question anchor, and threshold 0.55 (0.65 for the two intents whose mistakes cause actions). **Accuracy 0.29 → 0.56. LLM escalation 76% → 48%.** Local precision is 96.9%, and 0 of 11 general questions are claimed. Two read-only precision dips are accepted and documented. It also fixed 4 golden test rows that were near-copies of router phrases, and added a permanent near-duplicate guard.*
+- [ ] Next coverage lever, if needed: a calibrated classifier over the same embeddings (research-ranked #4). Only if phrase coverage plateaus.
 
 Routing is the historical failure point and is completely unmeasured. ~16 intents and 27
 MCP tools now compete for phrasings; measured industry data shows routing accuracy

@@ -1,7 +1,7 @@
 {
   "meta": {
-    "golden_sha256": "cb7beb3424d1e4d98c5dfe2b4af0d7d6446c35e6b2f108fd616dec2fbc3b2f4c",
-    "static_phrase_count": 102,
+    "golden_sha256": "d14353bb600fdb7024980863ea1adbf2b0b695ed0137f7fc01db7dcf865fdd4c",
+    "static_phrase_count": 237,
     "semantic_router_version": "0.0.72",
     "date": "2026-09-29",
     "slice": "test"
@@ -9,50 +9,50 @@
   "per_class": {
     "academic_tracking": {
       "precision": 1.0,
+      "recall": 0.4545,
+      "f1": 0.625,
+      "support": 11
+    },
+    "coding_task": {
+      "precision": 1.0,
+      "recall": 0.0909,
+      "f1": 0.1667,
+      "support": 11
+    },
+    "correct_fact": {
+      "precision": 1.0,
       "recall": 0.2727,
       "f1": 0.4286,
       "support": 11
     },
-    "coding_task": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
-      "support": 11
-    },
-    "correct_fact": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
-      "support": 11
-    },
     "directory_size": {
-      "precision": 0.8333,
-      "recall": 0.4545,
-      "f1": 0.5882,
+      "precision": 0.9167,
+      "recall": 1.0,
+      "f1": 0.9565,
       "support": 11
     },
     "disk_usage_by_folder": {
       "precision": 1.0,
-      "recall": 0.5455,
-      "f1": 0.7059,
+      "recall": 0.9091,
+      "f1": 0.9524,
       "support": 11
     },
     "free_space_summary": {
       "precision": 1.0,
-      "recall": 0.6364,
-      "f1": 0.7778,
+      "recall": 1.0,
+      "f1": 1.0,
       "support": 11
     },
     "list_processes_detailed": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
+      "precision": 1.0,
+      "recall": 0.7273,
+      "f1": 0.8421,
       "support": 11
     },
     "mcp_tool": {
       "precision": 1.0,
-      "recall": 0.2727,
-      "f1": 0.4286,
+      "recall": 0.4545,
+      "f1": 0.625,
       "support": 11
     },
     "open_application": {
@@ -62,45 +62,45 @@
       "support": 11
     },
     "remember_fact": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
+      "precision": 1.0,
+      "recall": 0.1818,
+      "f1": 0.3077,
       "support": 11
     },
     "research_task": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
+      "precision": 1.0,
+      "recall": 0.1818,
+      "f1": 0.3077,
       "support": 11
     },
     "search_files": {
       "precision": 1.0,
-      "recall": 0.0909,
-      "f1": 0.1667,
+      "recall": 0.3636,
+      "f1": 0.5333,
       "support": 11
     },
     "system_inspect": {
-      "precision": 1.0,
-      "recall": 0.2727,
-      "f1": 0.4286,
+      "precision": 0.8571,
+      "recall": 0.5455,
+      "f1": 0.6667,
       "support": 11
     },
     "top_memory_processes": {
-      "precision": 1.0,
-      "recall": 0.8182,
-      "f1": 0.9,
+      "precision": 0.9167,
+      "recall": 1.0,
+      "f1": 0.9565,
       "support": 11
     },
     "unsupported": {
       "precision": 1.0,
-      "recall": 0.2727,
-      "f1": 0.4286,
+      "recall": 0.4545,
+      "f1": 0.625,
       "support": 11
     },
     "web_task": {
       "precision": 1.0,
-      "recall": 0.0909,
-      "f1": 0.1667,
+      "recall": 0.5455,
+      "f1": 0.7059,
       "support": 11
     },
     "general_question": {
@@ -110,6 +110,6 @@
       "support": 11
     }
   },
-  "accuracy": 0.2995,
-  "escalation_rate": 0.754
+  "accuracy": 0.5615,
+  "escalation_rate": 0.4813
 }

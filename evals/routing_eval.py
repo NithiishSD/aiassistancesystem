@@ -46,6 +46,35 @@ CORE_LOCAL_INTENTS = [
 ]
 
 
+NEAR_DUPLICATE_THRESHOLD = 0.90
+
+
+def near_duplicates(phrases: list[str], rows: list[dict[str, str]],
+                    threshold: float = NEAR_DUPLICATE_THRESHOLD) -> list[tuple[str, str, float]]:
+    """Router phrases that are near-copies of golden rows, by cosine similarity.
+
+    Exact-match leakage checks miss paraphrases like "what's my ip" vs "what's my
+    ip address" (0.948); a near-copy of a held-out row inflates the test score
+    just as badly as an exact one.
+    """
+    import numpy as np
+
+    if not phrases or not rows:
+        return []
+    encoder = clf._get_encoder()
+    phrase_vecs = np.array(encoder(list(phrases)), dtype=float)
+    row_vecs = np.array(encoder([r["utterance"] for r in rows]), dtype=float)
+    phrase_vecs /= np.linalg.norm(phrase_vecs, axis=1, keepdims=True)
+    row_vecs /= np.linalg.norm(row_vecs, axis=1, keepdims=True)
+    sims = phrase_vecs @ row_vecs.T
+    found = []
+    for i, phrase in enumerate(phrases):
+        j = int(sims[i].argmax())
+        if sims[i, j] >= threshold:
+            found.append((phrase, rows[j]["utterance"], round(float(sims[i, j]), 3)))
+    return found
+
+
 def classes() -> list[str]:
     return sorted(clf.INTENT_UTTERANCES) + [GENERAL]
 

@@ -49,9 +49,20 @@ MAX_DYNAMIC_WORDS = 15
 _encoder = None
 DEFAULT_INTENT = "general_question"
 
-ROUTE_THRESHOLD = 0.65       # passed to each Route so semantic-router only
-                              # reports a name when cosine similarity is high enough
-CONFIDENCE_THRESHOLD = 0.65  # used in classify_intent() to decide LLM escalation
+# Intent routes (and the general-question anchor). 0.55, not 0.65: on the golden
+# DEV slice 0.55 raised local coverage with precision UP (96.2% -> 97.4% alone);
+# below 0.55 the extra local decisions were only ~87% correct.
+ROUTE_THRESHOLD = 0.55
+CONFIDENCE_THRESHOLD = ROUTE_THRESHOLD  # used in classify_intent() to decide LLM escalation
+# Domain (personal/academic) routes keep the original value: that router was not
+# re-measured, so it must not move with the intent threshold.
+DOMAIN_ROUTE_THRESHOLD = 0.65
+# Intents whose wrong match costs more than an LLM call keep the stricter 0.65:
+# open_application runs at Tier 1 without asking, unsupported refuses outright.
+# Product names ("firefox", "spotify") dominate MiniLM embeddings and pulled app
+# mentions into these routes; on DEV this raised local precision 94.4% -> 96.2%
+# for -0.5 points of coverage.
+STRICT_INTENT_THRESHOLDS = {"open_application": 0.65, "unsupported": 0.65}
 
 # In-memory LRU fast-path cache for instant repeat classifications (< 1ms)
 _ROUTING_CACHE: dict[str, dict] = {}
@@ -255,6 +266,224 @@ INTENT_UTTERANCES = {
     ],
 }
 
+# Short, realistic example phrases (OpenSpec change improve-layer1-coverage).
+# The phrases above open with a 20-40 word description that real requests embed
+# far from ("write a python function to reverse a linked list" scored 0.42 against
+# coding_task). Measured on the golden DEV slice: local coverage 28.4% -> 55.7% at
+# precision 96.2% -> 97.0%. None of these is within 0.90 cosine of a held-out test
+# row (enforced by tests/test_routing_eval.py).
+SHORT_EXAMPLE_UTTERANCES = {
+    'search_files': [
+        'find my notes pdf',
+        'where is my offer letter',
+        'search for my report file',
+        'locate the spreadsheet i made',
+        'find all my python files',
+        'where did i save the slides',
+        'look for a file called draft',
+        'find the pdf i downloaded',
+        'search my laptop for photos',
+    ],
+    'disk_usage_by_folder': [
+        'which folders take up the most space',
+        'biggest folders on my laptop',
+        'what is filling my disk',
+        'show folder sizes in my home',
+        'largest directories please',
+        'where is my space going',
+    ],
+    'top_memory_processes': [
+        "what's eating my ram",
+        'which apps use the most memory',
+        'top ram users',
+        'why is my memory full',
+        'show memory hungry processes',
+        'which process uses most ram',
+    ],
+    'free_space_summary': [
+        'how much storage do i have left',
+        'is my disk full',
+        'free space left?',
+        'how much room on my drive',
+        'remaining disk space',
+        'any storage left on this machine',
+    ],
+    'directory_size': [
+        'how big is this folder',
+        'how big is my photos folder',
+        'how large is downloads',
+        'folder size please',
+        'how much space does this directory use',
+        'check size of my videos folder',
+    ],
+    'remember_fact': [
+        'remember that i like chess',
+        "my brother's name is arjun",
+        'i prefer tea over coffee',
+        'note that my exam is next friday',
+        "i'm vegetarian",
+        'my favourite colour is blue',
+        'just so you know i work at night',
+        "keep in mind i'm left handed",
+        'i study computer science',
+        'my phone is a pixel',
+        # Statements that mention an app are facts, not launch requests.
+        'i use firefox for college work',
+        'my favourite editor is vim',
+        'i listen to music while coding',
+        'i keep my todo list in notion',
+    ],
+    'correct_fact': [
+        "that's wrong",
+        "no, that's not right",
+        'you remembered that wrong',
+        'forget what i told you',
+        'update that, it changed',
+        'that fact is outdated',
+        'delete that from memory',
+        "correction, it's actually wednesday",
+        'no i said tuesday not monday',
+        'you got my name wrong',
+    ],
+    'coding_task': [
+        'write a function to sort a list',
+        'fix this bug in my code',
+        'write a python script',
+        'debug my program',
+        'code a calculator in java',
+        'implement merge sort',
+        'write a sql query for this',
+        'refactor my function',
+        'make a website with html',
+        'write unit tests for this code',
+        'why does my code crash',
+        'convert this code to python',
+        # Building something that names an app is still coding.
+        'build an app like spotify',
+        'write a bot for telegram',
+        'create a browser extension',
+        'make a clone of an app in react',
+    ],
+    'unsupported': [
+        'play a song',
+        'set a reminder alarm',
+        'send a text to my friend',
+        'turn off the wifi',
+        'call my mom',
+        'order food',
+        'book a cab',
+        'increase the volume',
+    ],
+    'list_processes_detailed': [
+        'why is this process using so much cpu',
+        'what is pid 1234 doing',
+        'which process is hogging the cpu',
+        'why is my cpu at 100 percent',
+        'show threads for this process',
+        'details about a running process',
+        "my fan is loud, what's using cpu",
+    ],
+    'open_application': [
+        'open chrome',
+        'launch spotify app',
+        'start vs code',
+        'open the terminal app',
+        'open my browser',
+        'launch discord',
+        'open settings',
+        'start the calculator',
+    ],
+    'system_inspect': [
+        'battery level?',
+        'which kernel version',
+        'show my network address',
+        'how many cores do i have',
+        'what gpu is in this laptop',
+        'system uptime',
+        'ubuntu version',
+        'how much ram is installed',
+    ],
+    'research_task': [
+        'find research papers on this topic',
+        'what do studies say about this',
+        'look this up with sources',
+        'search arxiv for papers',
+        'give me academic sources on',
+        'research this and cite sources',
+        'find studies about sleep',
+        'summarize this article url with citations',
+    ],
+    'academic_tracking': [
+        'log that i solved a problem',
+        "i failed today's dsa question",
+        'what are my weak topics',
+        'what should i practice next',
+        'show my practice progress',
+        'how is my prep going',
+        'record my leetcode attempt',
+        'my practice streak',
+    ],
+    'web_task': [
+        'click the login button on this site',
+        'fill in the form on this website',
+        'take a screenshot of this page',
+        'type into the search box on the site',
+        'go to the website and click next',
+        'submit the form on that page',
+        'press the button on the webpage',
+    ],
+    'mcp_tool': [
+        'what time is it now',
+        'what date is it',
+        'count words in this text',
+        'weather in mumbai',
+        'latest news headlines',
+        'codeforces rating of a user',
+        'search github repos',
+        'summarize this paragraph',
+    ],
+}
+for _intent, _phrases in SHORT_EXAMPLE_UTTERANCES.items():
+    INTENT_UTTERANCES[_intent].extend(_phrases)
+
+# Negative anchor: explanation-style and concept questions. Routed as
+# DEFAULT_INTENT, so classify_intent escalates them exactly as today and they never
+# become an action. Without it, concept questions sharing an action's vocabulary
+# ("explain what ram is") were claimed by that action. Kept out of INTENT_UTTERANCES
+# because those keys define the routable intents.
+GENERAL_ANCHOR_UTTERANCES = [
+    'what is photosynthesis',
+    'explain how the internet works',
+    'who was albert einstein',
+    'what does an api mean',
+    'how do airplanes fly',
+    'what is machine learning',
+    'tell me something interesting',
+    'how are you',
+    'what is the difference between ram and rom',
+    'explain object oriented programming',
+    'why do we dream',
+    'what is a linked list',
+    'how does encryption work',
+    "what's the history of india",
+    'give me a fun fact',
+    'what is an algorithm',
+    'what is ram used for',
+    'how does virtual memory work',
+    'what is a process in an os',
+    'how are threads different from processes',
+    'what is a file system',
+    'how does a hard disk store data',
+    'what does the cpu cache do',
+    'what is a kernel',
+    'how does garbage collection work',
+    'what is cloud storage',
+    'what are trees in data structures',
+    'explain how a heap works',
+    'what is a graph in computer science',
+]
+
+
 DOMAIN_UTTERANCES = {
     "personal": [
         "what do you remember about my personal life",
@@ -352,15 +581,18 @@ def _build_intent_router(include_dynamic: bool = True) -> RouteLayer:
             log.info("dynamic_utterance_unknown_intent", extra={"intent": intent})
 
     routes = [
-        Route(name=name, utterances=utterances, score_threshold=ROUTE_THRESHOLD)
+        Route(name=name, utterances=utterances,
+              score_threshold=STRICT_INTENT_THRESHOLDS.get(name, ROUTE_THRESHOLD))
         for name, utterances in merged.items()
     ]
+    routes.append(Route(name=DEFAULT_INTENT, utterances=list(GENERAL_ANCHOR_UTTERANCES),
+                        score_threshold=ROUTE_THRESHOLD))
     return RouteLayer(encoder=_get_encoder(), routes=routes)
 
 
 def _build_domain_router() -> RouteLayer:
     routes = [
-        Route(name=name, utterances=utterances, score_threshold=ROUTE_THRESHOLD)
+        Route(name=name, utterances=utterances, score_threshold=DOMAIN_ROUTE_THRESHOLD)
         for name, utterances in DOMAIN_UTTERANCES.items()
     ]
     return RouteLayer(encoder=_get_encoder(), routes=routes)

@@ -224,7 +224,7 @@ launch firefox,open_application,test
 start the terminal,open_application,dev
 open facebook,open_application,test
 fire up spotify,open_application,dev
-open the calculator app,open_application,test
+bring up the calculator,open_application,test
 launch brave browser pls,open_application,dev
 open files,open_application,test
 start libreoffice writer,open_application,dev
@@ -232,7 +232,7 @@ open the settings app,open_application,test
 can you launch obs,open_application,dev
 open gimp,open_application,test
 start the text editor,open_application,dev
-launch the app center,open_application,test
+get the ubuntu software store running,open_application,test
 open vlc player,open_application,dev
 open the trash,open_application,test
 start discord,open_application,dev
@@ -246,7 +246,7 @@ which linux kernel am i on,system_inspect,test
 what cpu does this laptop have,system_inspect,dev
 what's my ip address,system_inspect,test
 how long has my system been up,system_inspect,dev
-how many packages are installed,system_inspect,test
+count the software packages on this machine,system_inspect,test
 what gpu do i have,system_inspect,dev
 check my ubuntu version,system_inspect,test
 is my battery charging,system_inspect,dev
@@ -332,7 +332,7 @@ navigate to example.com/login and fill in the username field,web_task,test
 what time is it,mcp_tool,dev
 what's today's date,mcp_tool,test
 count the words in this: the quick brown fox jumps,mcp_tool,dev
-how many words does this paragraph have,mcp_tool,test
+tally up the words in the text below,mcp_tool,test
 summarize this text for me: lorem ipsum dolor sit amet,mcp_tool,dev
 what's the weather in chennai,mcp_tool,test
 will it rain tomorrow in bangalore,mcp_tool,dev
@@ -373,3 +373,13 @@ how do vaccines work,general_question,dev
 what's a good way to stay focused while studying,general_question,test
 is python compiled or interpreted,general_question,dev
 what does a cpu actually do,general_question,test
+i mostly browse on firefox,remember_fact,dev
+my go-to editor is sublime text,remember_fact,dev
+i open slack every morning to check class updates,remember_fact,dev
+i listen to spotify while i study,remember_fact,dev
+i take all my notes in obsidian,remember_fact,dev
+build a clone of the calculator app in javascript,coding_task,dev
+write a chrome extension that blocks distracting sites,coding_task,dev
+debug the vs code extension i'm writing,coding_task,dev
+write a discord bot in python,coding_task,dev
+make a spotify playlist analyzer in python,coding_task,dev
