@@ -215,6 +215,23 @@ def resolve_openrouter_model() -> str:
     return live[0] if live else OPENROUTER_CODING_CANDIDATES[0]
 
 
+@dataclass(frozen=True)
+class ProviderReply:
+    """What a provider returned: the text plus what it reported about the call.
+    Token counts are None when the provider didn't report them."""
+
+    text: str
+    request_model: str | None = None
+    response_model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+def _int_or_none(value: Any) -> int | None:
+    # bool is a subclass of int; a usage count is never a bool.
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _openai_compatible(
     source: str,
     endpoint: str,
@@ -223,7 +240,7 @@ def _openai_compatible(
     messages: list[dict[str, str]],
     json_mode: bool,
     extra_headers: dict[str, str] | None = None,
-) -> str:
+) -> ProviderReply:
     if not api_key:
         raise RuntimeError(f"{source} API key is not configured")
 
@@ -245,12 +262,21 @@ def _openai_compatible(
         timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
     if not isinstance(content, str):
         raise ValueError(f"{source} returned a non-text response")
-    return content
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    reported = data.get("model")
+    return ProviderReply(
+        text=content,
+        request_model=model,
+        response_model=reported if isinstance(reported, str) and reported else model,
+        input_tokens=_int_or_none(usage.get("prompt_tokens")),
+        output_tokens=_int_or_none(usage.get("completion_tokens")),
+    )
 
-def _gemini(messages: list[dict[str, str]], json_mode: bool) -> str:
+def _gemini(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
@@ -277,15 +303,24 @@ def _gemini(messages: list[dict[str, str]], json_mode: bool) -> str:
                 timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()
-            parts = response.json()["candidates"][0]["content"]["parts"]
-            return "".join(part["text"] for part in parts)
+            data = response.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            meta = data.get("usageMetadata") if isinstance(data.get("usageMetadata"), dict) else {}
+            reported = data.get("modelVersion")
+            return ProviderReply(
+                text="".join(part["text"] for part in parts),
+                request_model=model_name,
+                response_model=reported if isinstance(reported, str) and reported else model_name,
+                input_tokens=_int_or_none(meta.get("promptTokenCount")),
+                output_tokens=_int_or_none(meta.get("candidatesTokenCount")),
+            )
         except requests.exceptions.HTTPError as err:
             if err.response.status_code >= 500 and attempt == 0:
                 time.sleep(1)
                 continue
             raise
 
-def _groq(messages: list[dict[str, str]], json_mode: bool) -> str:
+def _groq(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
     model = os.getenv("GROQ_MODEL") or resolve_groq_model()
     return _openai_compatible(
         "groq",
@@ -297,7 +332,7 @@ def _groq(messages: list[dict[str, str]], json_mode: bool) -> str:
     )
 
 
-def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> str:
+def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
     api_key = os.getenv("NVIDIA_API_KEY", "")
     if not api_key:
         raise RuntimeError("nvidia_nim API key is not configured")
@@ -311,7 +346,7 @@ def _nvidia_nim(messages: list[dict[str, str]], json_mode: bool) -> str:
     )
 
 
-def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> str:
+def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY", "")
     if not api_key:
         raise RuntimeError("openrouter API key is not configured")
@@ -332,7 +367,7 @@ def _openrouter(messages: list[dict[str, str]], json_mode: bool) -> str:
     )
 
 
-def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> str:
+def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
     return _openai_compatible(
         "cerebras",
         "https://api.cerebras.ai/v1/chat/completions",
@@ -343,15 +378,31 @@ def _cerebras(messages: list[dict[str, str]], json_mode: bool) -> str:
     )
 
 
-def _local(messages: list[dict[str, str]], json_mode: bool) -> str:
+def _field(obj: Any, key: str) -> Any:
+    # ollama 0.3 returns a dict; newer clients return an object that also
+    # supports item access. Missing fields are None, never an error.
+    try:
+        return obj[key]
+    except (KeyError, TypeError, IndexError):
+        return getattr(obj, key, None)
+
+
+def _local(messages: list[dict[str, str]], json_mode: bool) -> ProviderReply:
     options: dict[str, Any] = {}
     if json_mode:
         options["format"] = "json"
     response = ollama.chat(model=LOCAL_MODEL, messages=messages, **options)
-    return response["message"]["content"]
+    reported = _field(response, "model")
+    return ProviderReply(
+        text=response["message"]["content"],
+        request_model=LOCAL_MODEL,
+        response_model=reported if isinstance(reported, str) and reported else LOCAL_MODEL,
+        input_tokens=_int_or_none(_field(response, "prompt_eval_count")),
+        output_tokens=_int_or_none(_field(response, "eval_count")),
+    )
 
 
-_PROVIDER_FUNCS: dict[str, Callable[[list[dict[str, str]], bool], str]] = {
+_PROVIDER_FUNCS: dict[str, Callable[[list[dict[str, str]], bool], "ProviderReply"]] = {
     "gemini": _gemini,
     "groq": _groq,
     "nvidia_nim": _nvidia_nim,
@@ -384,6 +435,8 @@ class _ProviderHealth:
     rate_limited: int = 0
     cooldown_until: float = 0.0
     last_error: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 _health: dict[str, _ProviderHealth] = {}
@@ -487,12 +540,15 @@ def _skip_reason(source: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
-def _record_success(source: str) -> None:
+def _record_success(source: str, reply: "ProviderReply | None" = None) -> None:
     _increment_usage(source)
     with _health_lock:
         health = _health_for(source)
         health.calls += 1
         health.successes += 1
+        if reply is not None:
+            health.input_tokens += reply.input_tokens or 0
+            health.output_tokens += reply.output_tokens or 0
 
 
 def _record_failure(source: str, error: Exception) -> None:
@@ -531,6 +587,8 @@ def provider_stats() -> dict[str, dict[str, Any]]:
                 "today": today.get(source, 0),
                 "budget": DAILY_REQUEST_BUDGETS.get(source),
                 "cooldown_remaining_s": round(max(0.0, health.cooldown_until - now), 1),
+                "input_tokens": health.input_tokens,
+                "output_tokens": health.output_tokens,
             }
     return stats
 
@@ -557,18 +615,55 @@ def strip_thinking_tags(text: str) -> str:
     return cleaned.strip()
 
 
-def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool) -> dict[str, str]:
+# OpenTelemetry GenAI semantic conventions (gen_ai.provider.name replaced the
+# deprecated gen_ai.system). gcp.gemini and groq are well-known values; the
+# rest are custom values, which the spec allows.
+GEN_AI_PROVIDER_NAMES = {
+    "gemini": "gcp.gemini", "groq": "groq", "nvidia_nim": "nvidia_nim",
+    "openrouter": "openrouter", "cerebras": "cerebras", "local": "ollama",
+}
+
+
+def _log_gen_ai_call(source: str, reply: "ProviderReply", started: float, task: str | None) -> None:
+    """One standard record per successful LLM call. Never includes prompt or
+    response text, only names, counts, and timing."""
+    log.info("gen_ai.client.operation", extra={
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": GEN_AI_PROVIDER_NAMES.get(source, source),
+        "gen_ai.request.model": reply.request_model,
+        "gen_ai.response.model": reply.response_model,
+        "gen_ai.usage.input_tokens": reply.input_tokens,
+        "gen_ai.usage.output_tokens": reply.output_tokens,
+        "zedek.duration_ms": round((time.perf_counter() - started) * 1000, 1),
+        "zedek.task": task,
+        "source": source,
+    })
+
+
+def _result(answer: str, source: str, reply: "ProviderReply") -> dict[str, Any]:
+    return {
+        "answer": answer,
+        "source": source,
+        "model": reply.response_model,
+        "usage": {"input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens},
+    }
+
+
+def _run_local_or_raise(messages: list[dict[str, str]], json_mode: bool,
+                        task: str | None = None) -> dict[str, Any]:
+    started = time.perf_counter()
     try:
-        answer = _local(messages, json_mode)
+        reply = _local(messages, json_mode)
     except Exception as error:
         log.info("local_fallback_failed", extra={"error": _safe_error_text(error)})
         raise AllProvidersUnavailableError(
             "All cloud providers failed and local Ollama is unavailable. "
             f"Check `ollama serve` and `ollama pull {LOCAL_MODEL}`."
         ) from error
-    cleaned_answer = strip_thinking_tags(answer) if not json_mode else answer
+    cleaned_answer = strip_thinking_tags(reply.text) if not json_mode else reply.text
     log.info("provider_response", extra={"source": "local"})
-    return {"answer": cleaned_answer, "source": "local"}
+    _log_gen_ai_call("local", reply, started, task)
+    return _result(cleaned_answer, "local", reply)
 
 
 def generate_chat(
@@ -576,8 +671,11 @@ def generate_chat(
     json_mode: bool = False,
     force_local: bool = False,
     task: str | None = None,
-) -> dict[str, str]:
-    """Generate a response using a task-aware provider chain."""
+) -> dict[str, Any]:
+    """Generate a response using a task-aware provider chain.
+
+    Returns {"answer", "source", "model", "usage": {"input_tokens", "output_tokens"}}.
+    """
     if task == "coding" and not force_local:
         if not cloud_coding_allowed():
             force_local = True
@@ -595,7 +693,7 @@ def generate_chat(
         log.info("local_only_mode", extra={
             "reason": "force_local" if force_local else "ALLOW_CLOUD_disabled",
         })
-        return _run_local_or_raise(messages, json_mode)
+        return _run_local_or_raise(messages, json_mode, task)
 
     chain = TASK_PROVIDERS.get(task, DEFAULT_CHAIN) if task else DEFAULT_CHAIN
     for source in chain:
@@ -610,19 +708,21 @@ def generate_chat(
             reason, detail = skip
             log.info("provider_skipped", extra={"source": source, "reason": reason, **detail})
             continue
+        started = time.perf_counter()
         try:
-            answer = provider(messages, json_mode)
+            reply = provider(messages, json_mode)
         except Exception as error:
             if not _is_not_configured(error):
                 _record_failure(source, error)
             log.info("provider_failed", extra={"source": source, "error": _safe_error_text(error)})
             continue
-        _record_success(source)
-        cleaned_answer = strip_thinking_tags(answer) if not json_mode else answer
+        _record_success(source, reply)
+        cleaned_answer = strip_thinking_tags(reply.text) if not json_mode else reply.text
         log.info("provider_response", extra={"source": source})
-        return {"answer": cleaned_answer, "source": source}
+        _log_gen_ai_call(source, reply, started, task)
+        return _result(cleaned_answer, source, reply)
 
-    return _run_local_or_raise(messages, json_mode)
+    return _run_local_or_raise(messages, json_mode, task)
 
 
 if __name__ == "__main__":

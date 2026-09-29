@@ -17,7 +17,7 @@ import json
 import os
 import re
 import ollama
-from zedek_logger import get_logger
+from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import gate
 import memory
@@ -1417,6 +1417,14 @@ def _handle_decomposed(user_input: str) -> str:
 
 
 def handle(user_input: str) -> str:
+    """One user turn. Every log line written while handling it, in any module,
+    carries the same trace_id (zedek_logger.trace_context)."""
+    with trace_context():
+        log.info("turn_started", extra={"chars": len(user_input or "")})
+        return _handle_turn(user_input)
+
+
+def _handle_turn(user_input: str) -> str:
     """Full pipeline: (optional) decompose -> route -> validate -> execute -> answer -> store turn."""
     recent_user_turns = [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]
 

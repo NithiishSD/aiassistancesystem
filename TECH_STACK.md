@@ -43,7 +43,7 @@ from scratch.
 | Plan adherence | `watchdog.py` | Answers what the tier gate cannot: *is this the action the agent said it would take?* |
 | Code execution | `sandbox_runner.py` — bubblewrap namespaces, `setrlimit` fallback | Network-isolated by default, copy-on-write project mirrors. Proportionate for local single-user code; microVMs would be overkill. |
 | Secrets at rest | Fernet + PBKDF2-HMAC-SHA256 (480k iterations), 0600 | Tested invariant: a plaintext canary never appears in the on-disk vault. |
-| Logging | Structured JSON per module (`zedek_logger.py`) | **To be renamed to OpenTelemetry GenAI conventions** (Roadmap C1) so later tracing adoption is a config change. |
+| Logging | Structured JSON per module (`zedek_logger.py`), per-turn `trace_id` via contextvars | LLM calls logged as `gen_ai.client.operation` with OpenTelemetry GenAI field names (`gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.*`); no prompt/answer text. Adopting an OTel exporter (Langfuse/Phoenix) later is a config change. |
 | Tests | pytest — 488 tests | No evaluation harness yet; that's Roadmap A4 and it's the biggest testing gap. |
 
 ## Specialist agents

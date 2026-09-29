@@ -200,9 +200,10 @@ workflow files**. The user saw nothing and the model read everything.
 
 ## Phase C — Observability and cost
 
-### C1. Per-turn tracing
-- [ ] A `trace_id` per `handle()` call, threaded through classifier → planner → provider → MCP.
-- [ ] Rename existing log fields to **OpenTelemetry GenAI conventions** (`gen_ai.request.model`,
+### C1. Per-turn tracing ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `add-request-tracing`: a contextvar `trace_id` per `handle()` turn stamped on every module's log records (plus `gen_ai.conversation.id` per session), one `gen_ai.client.operation` record per LLM call with provider, request/response model, token counts and duration (never prompt or answer text), and per-provider token totals in `provider_stats()`. Grep one turn: `grep <trace_id> logs/*.log`.*
+- [x] A `trace_id` per `handle()` call, threaded through classifier → planner → provider → MCP.
+- [x] Rename existing log fields to **OpenTelemetry GenAI conventions** (`gen_ai.request.model`,
       `gen_ai.usage.input_tokens`, `gen_ai.operation.name`). Nearly free now, and makes
       later Langfuse/Phoenix adoption a config change rather than a migration.
 - **Don't self-host Langfuse yet** — that means ClickHouse + Docker on a laptop.

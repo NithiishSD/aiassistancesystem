@@ -38,7 +38,7 @@ def _chain(monkeypatch, funcs, chain=("gemini", "groq", "local")):
     monkeypatch.setattr(lp, "_PROVIDER_FUNCS", funcs)
     monkeypatch.setattr(lp, "TASK_PROVIDERS", {"t": list(chain)})
     monkeypatch.setattr(lp, "_run_local_or_raise",
-                        lambda messages, json_mode: {"answer": "local answer", "source": "local"})
+                        lambda messages, json_mode, task=None: {"answer": "local answer", "source": "local"})
 
 
 def _counting(answer=None, error=None):
@@ -48,7 +48,7 @@ def _counting(answer=None, error=None):
         calls["n"] += 1
         if error is not None:
             raise error
-        return answer
+        return lp.ProviderReply(text=answer, request_model="m", response_model="m")
     fn.calls = calls
     return fn
 
