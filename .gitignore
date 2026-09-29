@@ -27,6 +27,7 @@ chroma_db.backup-*/
 
 # Per-day LLM provider request counts (llm_provider quota tracking)
 data/provider_usage.json
+data/llm_cache.sqlite3
 
 # Pinned MCP tool definitions (per machine; trust on first use)
 data/mcp_tool_lock.json

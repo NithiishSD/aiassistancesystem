@@ -19,6 +19,7 @@ import requests
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
+import llm_cache
 import ollama
 from llm_schemas import json_schema_for
 from zedek_logger import get_logger
@@ -1068,6 +1069,7 @@ def generate_structured(
     response_model: type[BaseModel],
     task: str | None = None,
     force_local: bool = False,
+    cache: bool = False,
 ) -> dict[str, Any]:
     """Like generate_chat, but the reply is constrained to and validated against
     `response_model` (ROADMAP F2). Adds "data": a validated instance.
@@ -1075,8 +1077,29 @@ def generate_structured(
     Each provider gets its native schema mode where it has one, and one re-ask
     with the validation error before the chain moves on. Raises
     StructuredOutputError if no provider, local included, produces valid data.
+
+    cache=True reuses a stored result for byte-identical input (ROADMAP F5). Only
+    for deterministic sub-tasks; see llm_cache.
     """
-    return _dispatch(messages, True, force_local, task, response_model)
+    use_cache = cache and not force_local and llm_cache.enabled()
+    cache_key = llm_cache.key(task, response_model, messages) if use_cache else ""
+    if use_cache:
+        hit = llm_cache.get(cache_key)
+        if hit is not None:
+            try:
+                data = response_model.model_validate_json(hit["data"])
+            except ValueError:
+                data = None  # stored under an older schema shape: a miss
+            if data is not None:
+                log.info("llm_cache_hit", extra={"task": task, "schema": response_model.__name__})
+                return {"answer": hit["data"], "source": "cache", "model": hit["model"],
+                        "usage": {"input_tokens": 0, "output_tokens": 0}, "data": data}
+
+    result = _dispatch(messages, True, force_local, task, response_model)
+    # A local-fallback answer is weaker; don't lock it in.
+    if use_cache and result["source"] != "local":
+        llm_cache.put(cache_key, result["data"].model_dump_json(), result["source"], result.get("model"))
+    return result
 
 
 if __name__ == "__main__":

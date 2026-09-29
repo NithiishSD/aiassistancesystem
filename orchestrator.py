@@ -47,6 +47,104 @@ WATCHDOG = Watchdog()
 ACADEMIC_TRACKER = AcademicTracker()
 
 
+# ── Static-first prompts (ROADMAP F5) ────────────────────────────────────────
+# Instructions live in these constants, byte-identical on every call; whatever
+# varies per request goes in the last message. A shared prefix lets provider
+# prompt caches hit (and on Groq/Cerebras cached tokens don't count against rate
+# limits). Never interpolate into these strings.
+
+_SYSTEM_COMMAND_SYSTEM = (
+    "You are a Linux system administration assistant. Generate a SINGLE safe, non-interactive, "
+    "read-only bash command or pipeline to inspect the system and answer the user's question.\n"
+    "Rules:\n"
+    "- Only read-only commands (dpkg, uname, lscpu, cat /sys/..., cat /proc/..., free, df, ps, uptime, ip, which, wc, grep, awk, cut, etc.)\n"
+    "- No modifications, no sudo, no file writes (> or >>), no interactive flags\n"
+    "- Output ONLY the raw command string without markdown fences, quotes, or explanation."
+)
+
+_TOOL_PICK_SYSTEM = (
+    "Pick the single most appropriate tool for the user request from the available tools "
+    "listed in the message.\n"
+    "Output ONLY the tool qualified_name (e.g. mcp_zedek_tools_current_time). No explanation."
+)
+
+_CORRECTION_SYSTEM = """The user is correcting, retracting, or removing previously stored information.
+The message lists numbered candidate facts from memory and the user's statement.
+
+Determine which candidate fact (if any) this statement contradicts, negates, or wants removed.
+- If the user wants to update the fact with a new value, provide the index and the updated fact.
+- If the user wants to remove/delete the fact because it is false or mistaken (without replacing it), provide the index and set "corrected_fact": null.
+- If none of the candidates match, set both to null.
+
+Respond with "index" (the number of one listed candidate, or null) and "corrected_fact"
+("User's <attribute>: <new value>", or null)."""
+
+_ACKNOWLEDGE_SYSTEM = """Write a brief (1-2 sentence), warm, natural acknowledgment of what the user
+just told you about themselves. You may ask a short, relevant follow-up question if it
+fits naturally. Do NOT invent or assume any details the user didn't actually say — only
+react to what's explicitly stated."""
+
+_CANONICALIZE_SYSTEM = """Rewrite the user statement in the message into clean, standardized facts about the user.
+Each fact is an attribute (a short lowercase noun phrase) and its value.
+If the statement contains multiple distinct facts, return each one separately.
+
+Examples:
+"okay so basically i study at psg college of technology" ->
+{"facts": [{"attribute": "college", "value": "PSG College of Technology"}]}
+
+"see software system is the program provided by the amcs department and ml java are the subjects i study" ->
+{"facts": [{"attribute": "program", "value": "Software Systems"},
+           {"attribute": "department", "value": "AMCS"},
+           {"attribute": "subjects", "value": "Machine Learning, Java"}]}
+
+"i really like python a lot" ->
+{"facts": [{"attribute": "favorite programming language", "value": "Python"}]}
+
+If the statement does NOT contain any real, concrete fact about the user (e.g. it is a question,
+a greeting, or routine banter), return {"facts": []}."""
+
+_GENERAL_QA_SYSTEM = """You are Zedek, a helpful personal assistant.
+The user you are talking to is a separate person — their own name and facts (if known)
+arrive with their latest message under "Long-term facts." Never confuse your own identity
+(Zedek, the assistant) with the user's identity.
+Never contradict, reverse, or "correct" a fact stated about the user under "Long-term facts" —
+treat those facts as ground truth about the user, not up for debate.
+
+IMPORTANT: If neither the long-term facts nor the recent conversation actually contain
+the answer, say plainly that you don't have that information yet — do NOT invent, guess,
+or use placeholder text. Never fabricate specific facts (names, places, numbers) that
+aren't present in the context.
+
+Answer the user's latest message concisely, using the conversation so far as context."""
+
+_ACADEMIC_INTENT_SYSTEM = """The user is talking about their DSA / aptitude / placement practice.
+
+Decide what their message wants:
+- "log"     — they are recording a practice attempt they just did
+- "review"  — they are asking what is weak or what to practice next
+- "summary" — they are asking about overall progress, accuracy, or streak
+
+If (and only if) the action is "log", also extract:
+- topic: the subject area (e.g. "dynamic programming", "graphs", "quantitative aptitude")
+- result: exactly one of "solved", "failed", "partial"
+- problem: the problem name, if mentioned (else "")
+- difficulty: easy/medium/hard, if mentioned (else "")
+- minutes: minutes spent as a number, if mentioned (else 0)
+
+Return ONLY valid JSON:
+{"action": "log", "topic": "graphs", "result": "solved", "problem": "", "difficulty": "", "minutes": 0}"""
+
+_PROCESS_REASONING_SYSTEM = """The message contains data on currently running processes and the user's question.
+Answer their question using ONLY that data. Do not invent process names, memory values,
+or running times not present in the data. If the data doesn't contain enough information
+to answer, say so plainly."""
+
+
+def _static_first(system: str, dynamic: str) -> list[dict[str, str]]:
+    """Fixed instructions first, per-request content last (ROADMAP F5)."""
+    return [{"role": "system", "content": system}, {"role": "user", "content": dynamic}]
+
+
 def _declared_write_targets(plan: dict) -> set[str]:
     """The set of file writes a coding plan actually declared.
 
@@ -147,17 +245,9 @@ def _handle_system_inspect(user_input: str, domain: str) -> str:
     via_cache = bool(command)
 
     if not command:
-        prompt = (
-            "You are a Linux system administration assistant. Generate a SINGLE safe, non-interactive, "
-            "read-only bash command or pipeline to inspect the system and answer the user's question.\n"
-            "Rules:\n"
-            "- Only read-only commands (dpkg, uname, lscpu, cat /sys/..., cat /proc/..., free, df, ps, uptime, ip, which, wc, grep, awk, cut, etc.)\n"
-            "- No modifications, no sudo, no file writes (> or >>), no interactive flags\n"
-            "- Output ONLY the raw command string without markdown fences, quotes, or explanation.\n\n"
-            f"User Question: {user_input}"
-        )
         try:
-            res = llm_provider.generate_chat([{"role": "user", "content": prompt}], task="process_reasoning")
+            res = llm_provider.generate_chat(
+                _static_first(_SYSTEM_COMMAND_SYSTEM, f"User Question: {user_input}"), task="process_reasoning")
             command = _clean_generated_command(res.get("answer", ""))
         except Exception as e:
             log.info("system_inspect_command_gen_failed", extra={"error": str(e)})
@@ -530,14 +620,10 @@ def _select_mcp_tool(user_input: str, target_tool_qname: str | None = None) -> m
         f"- {spec.qualified_name}: {model_facing_description(spec)}"
         for spec in registry.values()
     )
-    prompt = (
-        f"Pick the single most appropriate tool for this user request from the list below.\n"
-        f"User request: '{user_input}'\n"
-        f"Available tools:\n{tool_list_str}\n\n"
-        f"Output ONLY the tool qualified_name (e.g. mcp_zedek_tools_current_time). No explanation."
-    )
     try:
-        res = llm_provider.generate_chat([{"role": "user", "content": prompt}], task="process_reasoning")
+        res = llm_provider.generate_chat(
+            _static_first(_TOOL_PICK_SYSTEM, f"Available tools:\n{tool_list_str}\n\nUser request: '{user_input}'"),
+            task="process_reasoning")
         chosen = res.get("answer", "").strip()
         for qname, spec in registry.items():
             if qname in chosen:
@@ -649,26 +735,15 @@ def _handle_correction(raw_text: str, domain: str) -> str:
         return "I see you're correcting something, but I don't have a stored fact that matches what you're correcting."
 
     candidate_list = "\n".join(f"{i}: {c['text']}" for i, c in enumerate(candidates))
-    recent_context = f"\nRecent conversation context: Zedek asked: \"{last_q}\"" if last_q else ""
-
-    prompt = f"""The user is correcting, retracting, or removing previously stored information.{recent_context}
-
-Here are the candidate stored facts in memory:
+    recent_context = f"Recent conversation context: Zedek asked: \"{last_q}\"\n\n" if last_q else ""
+    dynamic = f"""{recent_context}Candidate facts:
 {candidate_list}
 
-The user's statement: "{raw_text}"
-
-Determine which candidate fact (if any) this statement contradicts, negates, or wants removed.
-- If the user wants to update the fact with a new value, provide the index and the updated fact.
-- If the user wants to remove/delete the fact because it is false or mistaken (without replacing it), provide the index and set "corrected_fact": null.
-- If none of the candidates match, set both to null.
-
-Respond with "index" (a number 0-{len(candidates)-1}, or null) and "corrected_fact"
-("User's <attribute>: <new value>", or null)."""
+The user's statement: "{raw_text}\""""
 
     try:
         llm_result = llm_provider.generate_structured(
-            [{"role": "user", "content": prompt}], llm_schemas.FactCorrection, task="fact_handling",
+            _static_first(_CORRECTION_SYSTEM, dynamic), llm_schemas.FactCorrection, task="fact_handling",
         )
         index = llm_result["data"].index
         corrected_fact = llm_result["data"].corrected_fact
@@ -698,14 +773,8 @@ def _acknowledge_fact(raw_text: str) -> str:
     instead of a flat canned response. Strictly grounded in only what the
     user actually stated — never invents unstated details about them.
     """
-    prompt = f"""The user just told you this about themselves: "{raw_text}"
-
-Write a brief (1-2 sentence), warm, natural acknowledgment. You may ask a short,
-relevant follow-up question if it fits naturally. Do NOT invent or assume any
-details the user didn't actually say — only react to what's explicitly stated."""
-
     result = llm_provider.generate_chat(
-        [{"role": "user", "content": prompt}],
+        _static_first(_ACKNOWLEDGE_SYSTEM, f'The user just told you this about themselves: "{raw_text}"'),
         task="fact_handling",
     )
     return result["answer"].strip()
@@ -720,30 +789,10 @@ def canonicalize_fact(raw_text: str) -> list[str]:
     Returns a list of standardized fact strings ["User's <attr>: <val>", ...],
     or [] if no real facts could be extracted.
     """
-    prompt = f"""Rewrite the following user statement into clean, standardized facts about the user.
-Each fact is an attribute (a short lowercase noun phrase) and its value.
-If the statement contains multiple distinct facts, return each one separately.
-
-Examples:
-"okay so basically i study at psg college of technology" ->
-{{"facts": [{{"attribute": "college", "value": "PSG College of Technology"}}]}}
-
-"see software system is the program provided by the amcs department and ml java are the subjects i study" ->
-{{"facts": [{{"attribute": "program", "value": "Software Systems"}},
-           {{"attribute": "department", "value": "AMCS"}},
-           {{"attribute": "subjects", "value": "Machine Learning, Java"}}]}}
-
-"i really like python a lot" ->
-{{"facts": [{{"attribute": "favorite programming language", "value": "Python"}}]}}
-
-If the statement does NOT contain any real, concrete fact about the user (e.g. it is a question,
-a greeting, or routine banter), return {{"facts": []}}.
-
-Statement: {raw_text}"""
-
     try:
         result = llm_provider.generate_structured(
-            [{"role": "user", "content": prompt}], llm_schemas.FactList, task="fact_handling",
+            _static_first(_CANONICALIZE_SYSTEM, f"Statement: {raw_text}"), llm_schemas.FactList,
+            task="fact_handling", cache=True,
         )
     except llm_provider.StructuredOutputError as e:
         log.info("fact_canonicalization_failed", extra={"error": str(e)})
@@ -791,32 +840,20 @@ def answer_general_question(user_input: str, domain: str) -> str:
     if previous_question:
         turn_structure_note = f"""
 Your previous message ended with this question: "{previous_question}"
-The user's new message below may (a) answer that question, (b) ask something entirely
+The user's new message may (a) answer that question, (b) ask something entirely
 new, or (c) do both in one message. Identify which parts of their message are a reply
 to your question versus a new topic, and address each part clearly and separately —
-do not merge them into one confused statement."""
+do not merge them into one confused statement.
+"""
 
-    prompt = f"""You are Zedek, a helpful personal assistant.
-The user you are talking to is a separate person — their own name and facts (if known)
-are listed below under "Long-term facts." Never confuse your own identity (Zedek, the
-assistant) with the user's identity.
-Never contradict, reverse, or "correct" a fact already stated about the user below —
-treat everything in "Long-term facts" as ground truth about the user, not up for debate.
-{turn_structure_note}
-
-Long-term facts relevant to this question:
-{long_term_block}
-
-IMPORTANT: If neither the long-term facts above nor the recent conversation below
-actually contain the answer, say plainly that you don't have that information yet —
-do NOT invent, guess, or use placeholder text. Never fabricate specific facts
-(names, places, numbers) that aren't present in the context.
-
-Answer the user's latest message concisely, using the conversation so far as context."""
-
-    messages = [{"role": "system", "content": prompt}]
+    # Static system first, then the append-only history, then everything that
+    # varies per turn, so provider prefix caches can hit (ROADMAP F5).
+    messages = [{"role": "system", "content": _GENERAL_QA_SYSTEM}]
     messages.extend(SESSION_HISTORY)
-    messages.append({"role": "user", "content": user_input})
+    messages.append({"role": "user", "content": f"""Long-term facts relevant to this message:
+{long_term_block}
+{turn_structure_note}
+User's message: {user_input}"""})
 
     result = llm_provider.generate_chat(messages, task="general_qa")
     answer = result["answer"]
@@ -863,28 +900,10 @@ def _extract_academic_intent(user_input: str) -> dict:
     Falls back to "review" on any failure — reading progress is harmless,
     whereas guessing at a log entry would write junk into the practice history.
     """
-    prompt = f"""The user is talking about their DSA / aptitude / placement practice.
-
-Message: {user_input}
-
-Decide what they want:
-- "log"     — they are recording a practice attempt they just did
-- "review"  — they are asking what is weak or what to practice next
-- "summary" — they are asking about overall progress, accuracy, or streak
-
-If (and only if) the action is "log", also extract:
-- topic: the subject area (e.g. "dynamic programming", "graphs", "quantitative aptitude")
-- result: exactly one of "solved", "failed", "partial"
-- problem: the problem name, if mentioned (else "")
-- difficulty: easy/medium/hard, if mentioned (else "")
-- minutes: minutes spent as a number, if mentioned (else 0)
-
-Return ONLY valid JSON:
-{{"action": "log", "topic": "graphs", "result": "solved", "problem": "", "difficulty": "", "minutes": 0}}"""
-
     try:
         result = llm_provider.generate_structured(
-            [{"role": "user", "content": prompt}], llm_schemas.AcademicIntent, task="fact_handling",
+            _static_first(_ACADEMIC_INTENT_SYSTEM, f"Message: {user_input}"), llm_schemas.AcademicIntent,
+            task="fact_handling", cache=True,
         )
         return result["data"].model_dump()
     except Exception as e:
@@ -1240,17 +1259,12 @@ def execute(decision: dict) -> str:
 
 def _reason_over_process_data(process_data: list[dict], user_question: str) -> str:
     """Answer a process-analysis question using only the collected process data."""
-    prompt = f"""Here is data on currently running processes:
+    dynamic = f"""Process data:
 {json.dumps(process_data, indent=2)}
 
-The user asked: "{user_question}"
-
-Answer their question using ONLY the data above. Do not invent process names,
-memory values, or running times not present in the data. If the data doesn't
-contain enough information to answer, say so plainly."""
-
+The user asked: "{user_question}\""""
     result = llm_provider.generate_chat(
-        [{"role": "user", "content": prompt}],
+        _static_first(_PROCESS_REASONING_SYSTEM, dynamic),
         task="process_reasoning",
     )
     return result["answer"]

@@ -383,12 +383,13 @@ that is lost.
 - Evidence: plain chunking matches semantic chunking (NAACL 2025), and the free title
   prefix did well in a 2026 comparison of eight methods. Better sources, smaller prompts. 1 day.
 
-### F5. Static-first prompts + exact-match cache
-- [ ] Put the system prompt, schema, and few-shot examples **byte-identical and first**,
+### F5. Static-first prompts + exact-match cache ✅ DONE 2026-09-29
+*Shipped as OpenSpec change `static-first-prompts`: all eight orchestrator prompts now send byte-identical instructions as a leading system message and per-request content last; general Q&A is static system → append-only history → one user message with facts + question. `llm_cache.py` (stdlib sqlite3, 30-day TTL, `LLM_CACHE=off` kill switch) serves byte-identical canonicalization and academic-intent calls; only validated cloud results are stored. **Live: a repeated canonicalization went from 8.1 s / 265 tokens to 1 ms / 0 tokens.** Specialist-agent prompts (research, web, coding, planner) get the same layout when next touched.*
+- [x] Put the system prompt, schema, and few-shot examples **byte-identical and first**,
       then timestamps, memory, and the user query **last**, so provider prefix caches can
       hit. Cerebras and Groq don't count cached tokens against rate limits. Gemini's implicit
       cache needs 2,048–4,096-token prefixes, so short extraction prompts will mostly miss it.
-- [ ] SQLite exact-match hash cache for deterministic sub-tasks only, such as fact
+- [x] SQLite exact-match hash cache for deterministic sub-tasks only, such as fact
       canonicalization and argument extraction. **Never** cache anything touching memory,
       time, calendar, or the web. Effort: 0.5 day.
 

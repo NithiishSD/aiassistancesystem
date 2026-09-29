@@ -4,7 +4,8 @@ Tests must never write the owner's real data files. The provider usage counter
 (llm_provider, data/provider_usage.json) resolves its path from
 ZEDEK_PROVIDER_USAGE_PATH at call time, so point it at a temp file for the
 whole session. The same applies to the MCP tool lock (mcp_client,
-data/mcp_tool_lock.json) via ZEDEK_MCP_LOCK_PATH.
+data/mcp_tool_lock.json) via ZEDEK_MCP_LOCK_PATH and the LLM cache
+(llm_cache, data/llm_cache.sqlite3) via ZEDEK_LLM_CACHE_PATH.
 """
 
 import os
@@ -35,6 +36,10 @@ def pytest_configure(config):
     _previous_lock_path = os.environ.get("ZEDEK_MCP_LOCK_PATH")
     lock_dir = tempfile.mkdtemp(prefix="zedek_mcp_lock_")
     os.environ["ZEDEK_MCP_LOCK_PATH"] = os.path.join(lock_dir, "mcp_tool_lock.json")
+    # The exact-match LLM cache (llm_cache) is off by default in tests, so one
+    # test's stored result can never answer another's; cache tests turn it on.
+    os.environ["ZEDEK_LLM_CACHE_PATH"] = os.path.join(lock_dir, "llm_cache.sqlite3")
+    os.environ["LLM_CACHE"] = "off"
 
 
 def pytest_unconfigure(config):

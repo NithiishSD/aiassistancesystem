@@ -120,7 +120,7 @@ class TestDescriptionViews:
         captured = {}
 
         def fake_chat(messages, **kwargs):
-            captured["prompt"] = messages[0]["content"]
+            captured["prompt"] = "\n".join(m["content"] for m in messages)
             return {"answer": "mcp_srv_notes", "source": "stub"}
 
         monkeypatch.setattr(orchestrator.llm_provider, "generate_chat", fake_chat)
