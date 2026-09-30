@@ -34,6 +34,7 @@ import llm_schemas
 from coding_agent import CodingSpecialist
 import mcp_client
 import task_planner
+import user_profile
 import research_agent
 from research_agent import ResearchAgent
 import web_agent
@@ -925,7 +926,12 @@ def answer_general_question(user_input: str, domain: str) -> str:
     log.info("general_qa_started", extra={"user_input": user_input, "domain": domain})
 
     relevant_facts = memory.retrieve_relevant(user_input, domain=domain, content_type="fact", top_k=3)
-    long_term_lines = [f"- {item['text']}" for item in relevant_facts]
+    # Core profile facts ride along with questions about the user, because
+    # retrieval misses rewordings ("what do people call me"); ROADMAP F6.
+    retrieved_texts = {item["text"] for item in relevant_facts}
+    profile_facts = [item for item in user_profile.for_question(user_input, domain)
+                     if item["text"] not in retrieved_texts]
+    long_term_lines = [f"- {item['text']}" for item in relevant_facts + profile_facts]
     long_term_block = "\n".join(long_term_lines) if long_term_lines else "(no relevant long-term facts found)"
 
     previous_question = _last_assistant_question()
@@ -953,6 +959,7 @@ User's message: {user_input}"""})
     result = llm_provider.generate_chat(messages, task="general_qa", **({"stream": sink} if sink is not None else {}))
     answer = result["answer"]
     log.info("general_qa_answered", extra={"facts_used": len(relevant_facts),
+                                             "profile_facts": len(profile_facts),
                                              "session_turns_used": len(SESSION_HISTORY),
                                              "source": result["source"]})
     return answer

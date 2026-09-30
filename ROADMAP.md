@@ -415,8 +415,9 @@ that is lost.
       canonicalization and argument extraction. **Never** cache anything touching memory,
       time, calendar, or the web. Effort: 0.5 day.
 
-### F6. Core memory blocks (Letta / OpenClaw pattern)
-- [ ] A `user_profile` block (1–2k characters: name, college, courses, target companies)
+### F6. Core memory blocks (Letta / OpenClaw pattern) ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `core-profile-block`: `user_profile.py` picks the newest valid fact per core attribute (name, college, degree, semester, subjects, goals, target companies; at most 12 facts / 1,200 characters) and general Q&A adds them **only to questions about the user** (I / my / me). General questions still get no stored facts, and location, contact details and IDs are never in the block. **Measured: labelled facts in the answer context went from 36 / 35 / 34 to 40 / 40 / 39 of 43 at 37 / 187 / 412 facts**, leaks unchanged. Not "always in the prompt" and not a git-tracked file: this repository is public, and the fact history (A2) already records every change. The test suite now runs on a throwaway memory store.*
+- [x] A `user_profile` block (1–2k characters: name, college, courses, target companies)
       kept **always in the prompt**, stored as git-tracked markdown so every change is
       diffable and revertible.
 - The bi-temporal store (A2) stays the system of record. The block removes retrieval

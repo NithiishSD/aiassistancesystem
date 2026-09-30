@@ -67,7 +67,10 @@ it all maps onto what the obligations would require:
   Cerebras call carries prompt content, which can include stored facts about the user.
   Exempt today because the user is the data principal and chose these providers. It would
   **not** be fine if the data were a third party's. `ALLOW_CLOUD=false` forces local-only
-  and is the escape hatch.
+  and is the escape hatch. What is sent: facts that relevance selection returned for the
+  question, plus, for questions about the user (I / my / me) only, a core profile of at most
+  12 facts (name, college, degree, semester, subjects, goals). Location, contact details and
+  identifiers are never in that profile. A general-knowledge question carries no stored facts.
 - **36 raw conversation turns were persisted** before the tiered-memory redesign.
   `memory_hygiene.py --drop-conversations` removes them.
 

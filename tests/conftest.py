@@ -44,6 +44,12 @@ def pytest_configure(config):
     # classifier reads the path at import, so it is set before collection.
     os.environ["ZEDEK_DYNAMIC_UTTERANCES_PATH"] = os.path.join(lock_dir, "dynamic_utterances.json")
     os.environ["ZEDEK_MISROUTES_PATH"] = os.path.join(lock_dir, "misroutes.jsonl")
+    # Long-term memory is the owner's data too. memory.py reads the path at
+    # import, so tests get an empty throwaway store and can never read or
+    # write the live one.
+    os.environ["ZEDEK_CHROMA_PATH"] = os.path.join(lock_dir, "chroma_db")
+    for name in ("SCHEDULE", "SCHEDULE_STATE", "INBOX"):
+        os.environ[f"ZEDEK_{name}_PATH"] = os.path.join(lock_dir, f"{name.lower()}.json")
 
 
 def pytest_unconfigure(config):

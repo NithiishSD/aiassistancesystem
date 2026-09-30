@@ -12,6 +12,7 @@ Reported per model and size:
   first   questions whose first result is a labelled fact
   leaks   general-knowledge questions that returned any fact
   ms      mean time per question
+  +profile  labelled facts present once the core profile block is added
 
 With --reranker, the embedding stays the installed one and each cross-encoder
 is scored at every relevance threshold instead, because each model needs its
@@ -74,23 +75,31 @@ def evaluate(embedder: Embedder, facts: dict[str, str], queries: list[dict]) -> 
     original = memory._get_collection
     memory._get_collection = lambda domain: collection
     memory._keyword_indexes.clear()
+    import user_profile
+
+    profile = {fact["id"] for fact in user_profile.select(
+        [{"text": text, "metadata": {}, "id": fact_id} for fact_id, text in facts.items()])}
     out = {"pool": 0, "recall": 0, "labelled": 0, "first": 0, "with_relevant": 0,
-           "leaks": 0, "general": 0, "misses": []}
+           "leaks": 0, "general": 0, "misses": [], "covered": 0, "profile_size": len(profile),
+           "profile_sent_to_general": 0}
     try:
         started = time.perf_counter()
         for query in queries:
             pool = {item["id"] for item in memory.retrieve(
                 query["q"], content_type="fact", top_k=min(memory.DEFAULT_CANDIDATE_K, len(ids)))}
             kept = [item["id"] for item in memory.retrieve_relevant(query["q"], top_k=3)]
+            about_user = user_profile.refers_to_user(query["q"])
             if not query["relevant"]:
                 out["general"] += 1
                 out["leaks"] += bool(kept)
+                out["profile_sent_to_general"] += about_user
                 continue
             out["with_relevant"] += 1
             out["first"] += bool(kept and kept[0] in query["relevant"])
             for fact_id in query["relevant"]:
                 out["labelled"] += 1
                 out["pool"] += fact_id in pool
+                out["covered"] += fact_id in kept or (about_user and fact_id in profile)
                 if fact_id in kept:
                     out["recall"] += 1
                 else:
@@ -186,14 +195,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"{len(queries)} questions ({sum(1 for q in queries if not q['relevant'])} general)\n")
-    print(f"{'model':24} {'store':>5}  {'pool':>7} {'recall':>7} {'first':>7} {'leaks':>6} {'ms':>5}")
+    print("+profile = labelled facts in the answer context once the core profile block (ROADMAP F6) is added\n")
+    print(f"{'model':24} {'store':>5}  {'pool':>7} {'recall':>7} {'+profile':>8} {'first':>7} {'leaks':>6} {'ms':>5}")
     for name, path, prefix in models:
         embedder = Embedder(path, prefix)
         for attribute_count in DISTRACTOR_ATTRIBUTES:
             facts = {**data["facts"], **distractors(attribute_count)}
             r = evaluate(embedder, facts, queries)
             print(f"{name:24} {len(facts):>5}  {r['pool']:>3}/{r['labelled']:<3} {r['recall']:>3}/{r['labelled']:<3} "
-                  f"{r['first']:>3}/{r['with_relevant']:<3} {r['leaks']:>2}/{r['general']:<3} {r['ms']:>5.0f}")
+                  f"{r['covered']:>4}/{r['labelled']:<3} {r['first']:>3}/{r['with_relevant']:<3} {r['leaks']:>2}/{r['general']:<3} {r['ms']:>5.0f}")
             if args.misses and r["misses"]:
                 print(f"{'':24}        missed: {sorted(set(r['misses']))}")
     return 0
