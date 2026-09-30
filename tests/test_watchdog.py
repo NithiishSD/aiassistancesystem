@@ -159,9 +159,11 @@ class TestAuditRedaction:
 
     def test_secrets_never_written_to_audit_file(self, dog):
         plan_id = dog.register_plan("pay", ["fill_form"])
-        dog.observe(plan_id, "fill_form", {"cvv": "999", "ssn": "111-22-3333"}, tier=3)
+        # Not "999": the audit line's microsecond timestamp or hex plan id can
+        # contain three nines by chance, which failed this test about 1 run in 100.
+        dog.observe(plan_id, "fill_form", {"cvv": "cvv-value-K7", "ssn": "111-22-3333"}, tier=3)
         contents = open(dog.audit_path).read()
-        assert "999" not in contents
+        assert "cvv-value-K7" not in contents
         assert "111-22-3333" not in contents
         assert "[REDACTED]" in contents
 
