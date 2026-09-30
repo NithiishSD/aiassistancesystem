@@ -257,11 +257,13 @@ Today Zedek only reacts. The academic tracker and memory already hold everything
   APScheduler + SQLite (1–2 days). The digest itself is a stored prompt run on a cron,
   so it goes through the normal pipeline and tier gate.
 
-### D2. Streaming and progress feedback
-Fully blocking today; a 12-second cloud call is indistinguishable from a hang. Accuracy
+### D2. Streaming and progress feedback (text path ✅ DONE 2026-09-30)
+*Text path shipped as OpenSpec change `stream-chat-replies`: `generate_chat(..., stream=sink)` streams plain-text replies from every provider (OpenAI-compatible SSE, Gemini `streamGenerateContent`, Ollama), filters `<think>` blocks across chunk boundaries, and restarts the sink if a provider fails mid-answer so fallback still works. Only general Q&A streams; the REPL shows `(thinking…)` at once and reprints the final answer only when it differs. **Live (same 150-word prompt): OpenRouter first token 0.9 s vs 4.4 s blocking; NVIDIA NIM 2.7 s vs 9.9 s; Gemini 6.8 s vs 9.4 s; local llama3.1:8b 0.13 s vs ~18 s total.** The Gemini 12 s read timeout still trips on some requests before the first chunk; that is a chain issue, not a streaming one.*
+
+Before this, fully blocking; a 12-second cloud call is indistinguishable from a hang. Accuracy
 over speed is the right call, but *perceived* responsiveness is a separate axis and costs
 no accuracy.
-- [ ] Token streaming (`stream=True`) + a thinking indicator.
+- [x] Token streaming (`stream=True`) + a thinking indicator.
 - [ ] **In the voice path, split the stream at sentence boundaries and send each sentence
       to TTS as it arrives.** Home Assistant measured time-to-speech falling from
       **6.62 s → 0.51 s (cloud TTS) and 5.31 s → 0.56 s (local Piper)** (project-reported).

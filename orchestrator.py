@@ -16,6 +16,8 @@ Pipeline: request -> intent + domain -> tier gate -> execute or retrieve+answer 
 import json
 import os
 import re
+import sys
+from contextvars import ContextVar
 import ollama
 from text_sanitizer import model_facing_description
 from zedek_logger import get_logger, trace_context
@@ -45,6 +47,10 @@ RESEARCH_AGENT = ResearchAgent()
 WEB_AGENT = WebAgent()
 WATCHDOG = Watchdog()
 ACADEMIC_TRACKER = AcademicTracker()
+
+# Where the current turn's general answer streams to (ROADMAP D2). Set by
+# handle(); None means the answer is only returned.
+_REPLY_STREAM: ContextVar["llm_provider.StreamSink | None"] = ContextVar("_REPLY_STREAM", default=None)
 
 
 # ── Static-first prompts (ROADMAP F5) ────────────────────────────────────────
@@ -855,7 +861,9 @@ do not merge them into one confused statement.
 {turn_structure_note}
 User's message: {user_input}"""})
 
-    result = llm_provider.generate_chat(messages, task="general_qa")
+    sink = _REPLY_STREAM.get()
+    # Keyword only when set, so generate_chat stubs without `stream` keep working.
+    result = llm_provider.generate_chat(messages, task="general_qa", **({"stream": sink} if sink is not None else {}))
     answer = result["answer"]
     log.info("general_qa_answered", extra={"facts_used": len(relevant_facts),
                                              "session_turns_used": len(SESSION_HISTORY),
@@ -1428,22 +1436,78 @@ def _handle_decomposed(user_input: str) -> str:
 
     results: list[str] = []
     lines: list[str] = []
-    for i, subtask in enumerate(subtasks, start=1):
-        description = _substitute_result_placeholders(subtask["description"], results)
-        answer = _handle_single(description)
-        results.append(answer)
-        lines.append(f"{i}. {description}\n   → {answer}")
+    # Sub-answers are reformatted into a step list, so none of them stream.
+    token = _REPLY_STREAM.set(None)
+    try:
+        for i, subtask in enumerate(subtasks, start=1):
+            description = _substitute_result_placeholders(subtask["description"], results)
+            answer = _handle_single(description)
+            results.append(answer)
+            lines.append(f"{i}. {description}\n   → {answer}")
+    finally:
+        _REPLY_STREAM.reset(token)
 
     log.info("task_plan_execution_finished", extra={"subtask_count": len(subtasks)})
     return "I broke this into steps:\n\n" + "\n".join(lines)
 
 
-def handle(user_input: str) -> str:
+def handle(user_input: str, stream: "llm_provider.StreamSink | None" = None) -> str:
     """One user turn. Every log line written while handling it, in any module,
-    carries the same trace_id (zedek_logger.trace_context)."""
-    with trace_context():
-        log.info("turn_started", extra={"chars": len(user_input or "")})
-        return _handle_turn(user_input)
+    carries the same trace_id (zedek_logger.trace_context). With `stream`, a
+    general answer is also delivered to the sink as it is generated; the full
+    answer is always returned."""
+    token = _REPLY_STREAM.set(stream)
+    try:
+        with trace_context():
+            log.info("turn_started", extra={"chars": len(user_input or "")})
+            return _handle_turn(user_input)
+    finally:
+        _REPLY_STREAM.reset(token)
+
+
+class _TerminalStream:
+    """StreamSink for the terminal REPL: prints the answer as it arrives."""
+
+    def __init__(self, out=None) -> None:
+        self._out = out if out is not None else sys.stdout
+        self.shown = ""
+
+    def delta(self, text: str) -> None:
+        if not self.shown:
+            self._out.write("Zedek: ")
+        self.shown += text
+        self._out.write(text)
+        self._out.flush()
+
+    def restart(self) -> None:
+        if self.shown:
+            self._out.write("\n(connection dropped, retrying with another provider…)\n")
+            self._out.flush()
+        self.shown = ""
+
+
+def _needs_reprint(streamed: str, answer: str) -> bool:
+    """Whether the REPL must print the returned answer: nothing was streamed, or
+    what was streamed is not that answer (whitespace-normalized)."""
+    return not streamed or " ".join(streamed.split()) != " ".join((answer or "").split())
+
+
+def _repl_turn(user_input: str, out=None) -> None:
+    """One REPL turn: an immediate (thinking…) line, the streamed answer, and the
+    returned answer whenever the stream did not already show it."""
+    out = out if out is not None else sys.stdout
+    out.write("(thinking…)\n")
+    out.flush()
+    sink = _TerminalStream(out)
+    answer = handle(user_input, stream=sink)
+    if sink.shown:
+        out.write("\n")
+    if _needs_reprint(sink.shown, answer):
+        if sink.shown:
+            out.write("(final answer)\n")
+        out.write(f"Zedek: {answer}\n")
+    out.write("\n")
+    out.flush()
 
 
 def _handle_turn(user_input: str) -> str:
@@ -1483,5 +1547,4 @@ if __name__ == "__main__":
             break
         if not user_input:
             continue
-        answer = handle(user_input)
-        print(f"Zedek: {answer}\n")
+        _repl_turn(user_input)

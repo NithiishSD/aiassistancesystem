@@ -1254,6 +1254,8 @@ def _dispatch(
 
     def finish_local() -> dict[str, Any]:
         if response_model is None:
+            if relay is None:  # positional stubs of the local path keep working
+                return _run_local_or_raise(messages, json_mode, task)
             return _run_local_or_raise(messages, json_mode, task, relay)
         return _run_local_structured(messages, task, response_model, schema)
 
