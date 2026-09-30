@@ -18,10 +18,12 @@ academic retrieval never surfaces personal context and vice versa).
 import os
 import uuid
 import time
+from datetime import datetime
 import chromadb
 from chromadb.config import Settings
 from semantic_router.encoders import HuggingFaceEncoder
 import fact_attributes
+import fact_dates
 import memory_hygiene
 from zedek_logger import get_logger
 
@@ -121,6 +123,8 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
     }
     if content_type == "fact":
         metadata["valid_at"] = metadata["timestamp"]
+        # "exam next week" goes stale; record what it meant today (ROADMAP A2).
+        text = fact_dates.anchor_relative_dates(text, datetime.fromtimestamp(metadata["timestamp"]))
     if extra_metadata:
         reserved_keys = set(metadata)
         metadata.update({key: value for key, value in extra_metadata.items()

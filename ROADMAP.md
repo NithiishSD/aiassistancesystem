@@ -14,7 +14,7 @@ plan. That file is kept for history; this one is the plan.
 
 ## Where the project actually stands
 
-**Built and tested (2026-09-30):** 44 modules, 1,525 tests passing, 22 specs in `openspec/specs/`. Phases 1–6 (environment, logging,
+**Built and tested (2026-09-30):** 45 modules, 1,549 tests passing, 22 specs in `openspec/specs/`. Phases 1–6 (environment, logging,
 orchestrator + system agent, tier gate, long-term memory, session context) and Roadmap
 Items 1–14 (MCP client + 7 servers, sandboxed execution, evaluator agent, task planner,
 research agent, web agent, watchdog, security module, wake-word, academic tracking) are
@@ -48,7 +48,7 @@ contentless.
 6. **Not proactive.** It only ever speaks when spoken to.
    *Status: fixed — see Phase D1.*
 
-**Still open (2026-09-30):** relative dates in stored facts (A2), F10 (local citation check, to be measured first), static-first prompts for
+**Still open (2026-09-30):** F10 (local citation check, to be measured first), static-first prompts for
 the specialist agents (F5), and four things only the owner can do: the optional
 live-store cleanups (A1), saying which value is right for the conflicting facts
 `python memory.py --conflicts` lists (A2), trying voice with a real voice (D2, F9), and
@@ -89,7 +89,7 @@ is not a coding slip; there is no representation for *"this fact stopped being t
 - [x] Filter `invalid_at IS NULL` at retrieval. *(As an `invalidated` flag: Chroma cannot filter on "key is absent", but `$ne` matches rows without the key.)*
 - [x] Follow-up: when a *new* fact is remembered for an attribute that already has a value, decide whether it supersedes the old one. Attributes can be multi-valued, so this needs measuring. *Done in OpenSpec `supersede-and-recall-history`: a fixed table (`fact_attributes.py`) names the attributes that hold one value (name, college, semester, where the user lives, …); a new value for one of them supersedes the old, which is kept as history, and the reply says what was replaced. Everything else keeps both. Measured on the live store: 4 such attributes held conflicting values (11 facts). They are not resolved automatically; `python memory.py --conflicts` lists them for the owner.*
 - [x] Follow-up: "as of" questions ("where did I live last year"). The history is now kept; nothing reads it yet. *Done in the same change: a question about the user that refers to the past gets the matching no-longer-true facts with their dates. Live on a scratch store: "where did I live before?" answers with the superseded residence.*
-- [ ] Follow-up: relative dates are stored as written ("User's move date: last month", "exam next week"), so they go stale. Store the date they resolve to.
+- [x] Follow-up: relative dates are stored as written ("User's move date: last month", "exam next week"), so they go stale. Store the date they resolve to. *Done in OpenSpec `anchor-relative-dates`: a stored fact keeps the user's words and gains what they meant that day, e.g. "next week (week of 5 October 2026)"; "next Friday" and the like get "(said on …)" instead of a guess. Facts already stored are not rewritten.*
 - **Adopt the schema, not the dependency.** Zep/Graphiti want Neo4j and are tuned for
   millions of cold graphs; this is one user. ~50 lines here kills the whole bug class.
 
