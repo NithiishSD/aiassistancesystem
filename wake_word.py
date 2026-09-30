@@ -26,6 +26,7 @@ from a microphone transcript or typed text.
 
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import time
@@ -107,15 +108,21 @@ def stt_model_available() -> bool:
     return os.path.isdir(VOSK_MODEL_DIR)
 
 
-def qa_only_handler(question: str, domain: str = "personal") -> str:
+def qa_only_handler(question: str, domain: str = "personal", stream=None) -> str:
     """Default handler: answer the question, never execute an action.
 
     Routes straight to the orchestrator's general-question path, bypassing
     `execute()` entirely — so there is no code path from a spoken utterance
-    to a system action.
+    to a system action. With `stream` (an llm_provider.StreamSink), the answer
+    is also delivered as it is generated, so it can be spoken sentence by
+    sentence.
     """
     import orchestrator
-    return orchestrator.answer_general_question(question, domain)
+    token = orchestrator._REPLY_STREAM.set(stream)
+    try:
+        return orchestrator.answer_general_question(question, domain)
+    finally:
+        orchestrator._REPLY_STREAM.reset(token)
 
 
 class WakeWordListener:
@@ -126,11 +133,23 @@ class WakeWordListener:
         wake_word: str = DEFAULT_WAKE_WORD,
         window_seconds: int = ACTIVATION_WINDOW_SECONDS,
         handler: Callable[[str], str] | None = None,
+        speaker=None,
     ) -> None:
         self.wake_word = wake_word.lower()
         self.window_seconds = window_seconds
-        self.handler = handler or (lambda q: qa_only_handler(q))
+        self.handler = handler or (lambda q, stream=None: qa_only_handler(q, stream=stream))
+        # A speech.Speaker. With one, replies are spoken sentence by sentence as
+        # they are generated (ROADMAP D2); without one, behaviour is unchanged.
+        self.speaker = speaker
+        try:
+            self._handler_streams = "stream" in inspect.signature(self.handler).parameters
+        except (TypeError, ValueError):
+            self._handler_streams = False
         self._activated_at: float = 0.0
+
+    def _speak(self, text: str) -> None:
+        if self.speaker is not None and text:
+            self.speaker.say(text)
 
     # ── Activation state ─────────────────────────────────────────────────
 
@@ -198,6 +217,9 @@ class WakeWordListener:
         if self.is_sleep_command(text):
             self.deactivate()
             log.info("wake_word_deactivated", extra={})
+            if self.speaker is not None:
+                self.speaker.cancel()
+            self._speak("Going quiet.")
             return ListenResult(SLEPT, response="Going quiet. Say the wake word when you need me.", active=False)
 
         command = self.strip_wake_word(text) if has_wake_word else _normalize(text)
@@ -206,18 +228,29 @@ class WakeWordListener:
         if not command:
             self.activate()
             log.info("wake_word_activated_awaiting_command", extra={})
+            self._speak("Listening.")
             return ListenResult(ACTIVATED, response="Listening.", active=True)
 
         self.activate()  # each handled utterance refreshes the window
         log.info("wake_word_handling_utterance", extra={"chars": len(command)})
 
+        sink = self.speaker.stream() if self.speaker is not None and self._handler_streams else None
         try:
-            response = self.handler(command)
+            response = self.handler(command, stream=sink) if sink is not None else self.handler(command)
         except Exception as err:
             log.info("wake_word_handler_failed", extra={"error_type": type(err).__name__})
+            if self.speaker is not None:
+                self.speaker.cancel()
+            self._speak("Sorry, I couldn't answer that.")
             return ListenResult(REFUSED, response=f"I couldn't answer that: {err}",
                                 command=command, active=True)
 
+        if sink is not None:
+            sink.finish()
+        if sink is None or sink.emitted == 0:
+            # Nothing was streamed (no speaker-aware handler, or a non-streaming
+            # provider answered): speak the finished reply instead.
+            self._speak(response)
         return ListenResult(HANDLED, response=response, command=command, active=True)
 
     # ── Audio loop (requires a capture backend) ──────────────────────────
@@ -270,6 +303,11 @@ class WakeWordListener:
                 data, overflowed = stream.read(BLOCK_SIZE)
                 if overflowed:
                     log.info("wake_word_audio_overflow", extra={})
+                if self.speaker is not None and self.speaker.busy:
+                    # Do not listen to Zedek's own voice: inside the activation
+                    # window it would be taken as the user's next question.
+                    recognizer.Reset()
+                    continue
                 if not recognizer.AcceptWaveform(bytes(data)):
                     continue
 
@@ -282,3 +320,28 @@ class WakeWordListener:
                     on_result(result)
                 elif result.status in (HANDLED, ACTIVATED, SLEPT, REFUSED):
                     print(f"Zedek: {result.response}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    import speech
+
+    parser = argparse.ArgumentParser(description="Zedek wake-word listener (questions only, answered aloud)")
+    parser.add_argument("--no-speech", action="store_true", help="print answers instead of speaking them")
+    cli_args = parser.parse_args()
+
+    voice = None
+    if not cli_args.no_speech:
+        if speech.tts_available():
+            voice = speech.Speaker()
+        else:
+            print("No text-to-speech found (install speech-dispatcher for `spd-say`); answers will be printed.")
+    print(f"Say '{DEFAULT_WAKE_WORD}' followed by a question. Ctrl+C to stop.")
+    try:
+        WakeWordListener(speaker=voice).listen_forever(
+            on_result=lambda r: print(f"Zedek: {r.response}") if r.response else None)
+    except KeyboardInterrupt:
+        pass
+    except RuntimeError as problem:
+        print(problem)

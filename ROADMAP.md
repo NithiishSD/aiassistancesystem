@@ -278,8 +278,11 @@ Before this, fully blocking; a 12-second cloud call is indistinguishable from a 
 over speed is the right call, but *perceived* responsiveness is a separate axis and costs
 no accuracy.
 - [x] Token streaming (`stream=True`) + a thinking indicator.
-- [ ] **In the voice path, split the stream at sentence boundaries and send each sentence
-      to TTS as it arrives.** Home Assistant measured time-to-speech falling from
+- [x] **In the voice path, split the stream at sentence boundaries and send each sentence
+      to TTS as it arrives.** *Done in OpenSpec `speak-replies-by-sentence`: `speech.py` (sentence splitter, a speaking queue,
+      local `spd-say` backend) and `python wake_word.py` to start the listener, which had no entry point and no speech
+      before. Through the real pipeline with the local model: first sentence ready at 2.5 s, whole answer at 4.0 s. The
+      microphone is ignored while Zedek speaks. Not heard by a person yet: the check ran the speech command at minimum volume.* Home Assistant measured time-to-speech falling from
       **6.62 s → 0.51 s (cloud TTS) and 5.31 s → 0.56 s (local Piper)** (project-reported).
       This is the single biggest perceived-latency win found, and it uses no extra quota.
 - Hedged requests (firing a backup provider after ~p95 latency) belong on voice turns
