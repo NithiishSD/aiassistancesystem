@@ -356,20 +356,22 @@ class TestCorrection:
              patch.object(orchestrator, "LAST_ROUTING_DECISION", None), \
              patch.object(orchestrator, "_last_assistant_question", return_value=None), \
              patch.object(orchestrator.memory, "retrieve", return_value=candidates), \
-             patch.object(orchestrator.memory, "delete_by_ids") as delete, \
-             patch.object(orchestrator.memory, "store") as store:
+             patch.object(orchestrator.memory, "delete_by_ids") as hard_delete, \
+             patch.object(orchestrator.memory, "invalidate") as delete, \
+             patch.object(orchestrator.memory, "store", return_value="new-id") as store:
             reply = orchestrator._handle_correction("actually my college is PSG", "personal")
+        hard_delete.assert_not_called()  # real facts are kept as history (bitemporal-facts)
         return reply, delete, store
 
     def test_update(self):
         reply, delete, store = self._run(llm_schemas.FactCorrection(index=0, corrected_fact="User's college: PSG"))
-        delete.assert_called_once_with(["a"], domain="personal")
+        delete.assert_called_once_with(["a"], domain="personal", superseded_by="new-id")
         store.assert_called_once_with("User's college: PSG", domain="personal", content_type="fact")
         assert "updated" in reply
 
     def test_retraction(self):
         reply, delete, store = self._run(llm_schemas.FactCorrection(index=1, corrected_fact=None))
-        delete.assert_called_once_with(["b"], domain="personal")
+        delete.assert_called_once_with(["b"], domain="personal", superseded_by=None)
         store.assert_not_called()
 
     @pytest.mark.parametrize("index", [None, 7, -1])

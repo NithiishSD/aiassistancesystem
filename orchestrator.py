@@ -24,6 +24,7 @@ from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import LLM_RISK_TIERS, gate
 import memory
+import memory_hygiene
 import capabilities
 import classifier
 from routing_decision import RoutingDecision
@@ -821,15 +822,41 @@ The user's statement: "{raw_text}\""""
         return "I understand you're correcting that, but I couldn't confidently pinpoint which stored fact to update. Could you mention the specific detail?"
 
     old_fact = candidates[index]
-    memory.delete_by_ids([old_fact["id"]], domain=domain)
+    new_text = str(corrected_fact).strip() if corrected_fact else ""
+    if new_text.lower() in ("null", "none"):
+        new_text = ""
 
-    if corrected_fact and str(corrected_fact).strip().lower() not in ("null", "none"):
-        memory.store(str(corrected_fact).strip(), domain=domain, content_type="fact")
-        log.info("fact_corrected", extra={"old_fact": old_fact["text"], "new_fact": corrected_fact})
-        return f"Got it — I've updated that in memory. (Updated: \"{old_fact['text']}\" ➔ \"{corrected_fact}\")"
+    # The old fact is kept as history (ROADMAP A2) unless it isn't worth keeping:
+    # junk that hygiene rejects, or a replacement that says the same thing.
+    keep_history = memory_hygiene.is_valid_fact(old_fact["text"]) and not (
+        new_text and memory_hygiene._dedup_key(new_text) == memory_hygiene._dedup_key(old_fact["text"]))
+
+    new_id = None
+    if new_text:
+        # Store first: a replacement that hygiene rejects must not cost the old fact.
+        new_id = memory.store(new_text, domain=domain, content_type="fact")
+        if not new_id:
+            log.info("correction_replacement_rejected", extra={"old_fact": old_fact["text"], "new_fact": new_text})
+            return (f"I couldn't store that correction, so nothing was changed. "
+                    f"(Still: \"{old_fact['text']}\") Could you state the new value plainly?")
+
+    if keep_history:
+        memory.invalidate([old_fact["id"]], domain=domain, superseded_by=new_id)
     else:
-        log.info("fact_retracted", extra={"old_fact": old_fact["text"]})
-        return f"Got it — I've removed that from memory. (Removed: \"{old_fact['text']}\")"
+        memory.delete_by_ids([old_fact["id"]], domain=domain)
+
+    if new_text:
+        log.info("fact_corrected", extra={"old_fact": old_fact["text"], "new_fact": new_text,
+                                          "history_kept": keep_history})
+        note = "the old value is kept as history" if keep_history else "the old value was permanently deleted"
+        return f"Got it — I've updated that in memory. (Updated: \"{old_fact['text']}\" ➔ \"{new_text}\"; {note}.)"
+    if keep_history:
+        log.info("fact_retracted", extra={"old_fact": old_fact["text"], "history_kept": True})
+        return (f"Got it — I've marked that as no longer true and won't use it again. "
+                f"(Kept as history: \"{old_fact['text']}\". To erase history permanently, run "
+                f"`python memory_hygiene.py --purge-invalidated --apply`.)")
+    log.info("fact_retracted", extra={"old_fact": old_fact["text"], "history_kept": False})
+    return f"Got it — I've permanently deleted that from memory. (Deleted: \"{old_fact['text']}\")"
 
 
 def _acknowledge_fact(raw_text: str) -> str:

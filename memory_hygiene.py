@@ -172,6 +172,10 @@ def clean_store(domain: str = "personal", dry_run: bool = True,
 
     for document, metadata, item_id in zip(documents, metadatas, ids):
         report.scanned += 1
+        # History rows (ROADMAP A2) are not current facts: never a reason to
+        # delete a current fact as a "duplicate", and never rewritten.
+        if (metadata or {}).get("invalidated"):
+            continue
         content_type = (metadata or {}).get("content_type", "fact")
 
         if content_type != "fact":
@@ -223,6 +227,21 @@ def clean_store(domain: str = "personal", dry_run: bool = True,
     return report
 
 
+def purge_invalidated(domain: str = "personal", dry_run: bool = True) -> list[str]:
+    """Permanently remove facts kept as history (marked no longer valid).
+
+    Returns their IDs. Like clean_store(), deletes nothing unless dry_run=False.
+    """
+    import memory
+
+    collection = memory._get_collection(domain)
+    ids = collection.get(where={"invalidated": True}).get("ids") or []
+    if ids and not dry_run:
+        memory.delete_by_ids(ids, domain=domain)
+    log.info("memory_history_purge", extra={"domain": domain, "count": len(ids), "dry_run": dry_run})
+    return ids
+
+
 def format_cleanup_report(report: CleanupReport, domain: str, dry_run: bool) -> str:
     """Render a cleanup report for the terminal."""
     verb = "Would remove" if dry_run else "Removed"
@@ -255,8 +274,16 @@ if __name__ == "__main__":
 
     apply_changes = "--apply" in sys.argv
     include_conversations = "--drop-conversations" in sys.argv
+    purge_history = "--purge-invalidated" in sys.argv
 
     for domain_name in ("personal", "academic"):
+        if purge_history:
+            purged = purge_invalidated(domain=domain_name, dry_run=not apply_changes)
+            verb = "Permanently removed" if apply_changes else "Would permanently remove"
+            print(f"Memory history — domain '{domain_name}': {verb} {len(purged)} fact(s) no longer valid."
+                  + ("" if apply_changes or not purged else " Re-run with --apply to delete."))
+            print()
+            continue
         result = clean_store(
             domain=domain_name,
             dry_run=not apply_changes,

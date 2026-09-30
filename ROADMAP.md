@@ -73,12 +73,15 @@ says less. Everything here is about making its outputs trustworthy.*
       Linux-based system". The first outranked the real college fact on the live store. Add hedge words (presumably,
       likely, probably, possibly, maybe) to `normalize_fact()`'s rejections and sweep the existing rows.
 
-### A2. Bi-temporal facts — the structural fix
+### A2. Bi-temporal facts — the structural fix ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `bitemporal-facts` (main spec `openspec/specs/fact-history/`). A corrected or retracted fact is marked no longer valid and kept as history; it is hard-deleted only when it is not worth keeping (hygiene rejects it, or the replacement says the same thing). Saying "delete that" about a real fact keeps history too, and the reply says so; `python memory_hygiene.py --purge-invalidated --apply` erases history for good. No migration: rows without the new fields count as valid. **Also fixed: a correction used to delete the old fact before storing the new one and never checked the result, so a replacement rejected by hygiene lost the fact.** Inspect with `python memory.py --history "<query>"`. Live on a copy of the store: a corrected fact answers with the new value, and the old one shows as superseded.*
 The contradictory pair in the store (`"...exam next week"` + `"...exam next week: false"`)
 is not a coding slip; there is no representation for *"this fact stopped being true."*
-- [ ] Add `valid_at`, `invalid_at`, `superseded_by` to Chroma metadata.
-- [ ] On correction, stamp `invalid_at` instead of deleting — history is preserved.
-- [ ] Filter `invalid_at IS NULL` at retrieval.
+- [x] Add `valid_at`, `invalid_at`, `superseded_by` to Chroma metadata.
+- [x] On correction, stamp `invalid_at` instead of deleting — history is preserved.
+- [x] Filter `invalid_at IS NULL` at retrieval. *(As an `invalidated` flag: Chroma cannot filter on "key is absent", but `$ne` matches rows without the key.)*
+- [ ] Follow-up: when a *new* fact is remembered for an attribute that already has a value, decide whether it supersedes the old one. Attributes can be multi-valued, so this needs measuring.
+- [ ] Follow-up: "as of" questions ("where did I live last year"). The history is now kept; nothing reads it yet.
 - **Adopt the schema, not the dependency.** Zep/Graphiti want Neo4j and are tuned for
   millions of cold graphs; this is one user. ~50 lines here kills the whole bug class.
 

@@ -26,7 +26,8 @@ from zedek_logger import get_logger
 
 log = get_logger("memory")
 
-CHROMA_PATH = "./chroma_db"
+# ZEDEK_CHROMA_PATH points tests and trial runs at a copy instead of the live store.
+CHROMA_PATH = os.environ.get("ZEDEK_CHROMA_PATH", "./chroma_db")
 DEFAULT_USER_ID = "nithiish"  # the owner; multi-user enrollment updates this later
 EMBEDDING_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -117,6 +118,8 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
         "content_type": content_type,
         "timestamp": time.time(),
     }
+    if content_type == "fact":
+        metadata["valid_at"] = metadata["timestamp"]
     if extra_metadata:
         reserved_keys = set(metadata)
         metadata.update({key: value for key, value in extra_metadata.items()
@@ -130,10 +133,12 @@ def store(text: str, domain: str = "personal", content_type: str = "fact",
 
 
 def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_ID,
-             content_type: str | None = None, top_k: int = 5) -> list[dict]:
+             content_type: str | None = None, top_k: int = 5,
+             include_invalidated: bool = False) -> list[dict]:
     """
     Semantic search over stored memory, restricted to this user_id and domain.
     Optionally filter further by content_type ("fact" or "conversation").
+    Facts marked no longer valid are left out unless include_invalidated is set.
     """
     _validate_domain(domain)
     _validate_user_id(user_id)
@@ -144,11 +149,8 @@ def retrieve(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_I
 
     collection = _get_collection(domain)
 
-    where = {"user_id": user_id}
-    if content_type:
-        where = {"$and": [{"user_id": user_id}, {"content_type": content_type}]}
-
-    results = collection.query(query_texts=[query], n_results=top_k, where=where)
+    results = collection.query(query_texts=[query], n_results=top_k,
+                               where=_where(user_id, content_type, include_invalidated))
 
     items = []
     docs = results.get("documents", [[]])[0]
@@ -217,17 +219,27 @@ def _invalidate_keyword_index(domain: str) -> None:
     _index_versions[domain] = _index_versions.get(domain, 0) + 1
 
 
-def _where(user_id: str, content_type: str | None) -> dict:
+# A fact that stopped being true is kept as history (ROADMAP A2) and carries
+# invalidated=True. `$ne` also matches rows with no such key (checked on Chroma
+# 0.5.20, pinned by tests/test_fact_history.py), so every row written before
+# this field existed counts as valid without a migration.
+_STILL_VALID = {"invalidated": {"$ne": True}}
+
+
+def _where(user_id: str, content_type: str | None, include_invalidated: bool = False) -> dict:
+    clauses = [{"user_id": user_id}]
     if content_type:
-        return {"$and": [{"user_id": user_id}, {"content_type": content_type}]}
-    return {"user_id": user_id}
+        clauses.append({"content_type": content_type})
+    if not include_invalidated:
+        clauses.append(_STILL_VALID)
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
 
 def _keyword_index(domain: str, user_id: str, content_type: str | None):
     """Cached BM25 index for one scope, or None when the scope is empty.
 
     The signature includes collection.count() as well as the version bumped by
-    store()/delete_by_ids(), so writes made directly on the collection (e.g. by
+    store()/delete_by_ids()/invalidate(), so writes made directly on the collection (e.g. by
     memory_hygiene.clean_store) also invalidate it.
     """
     import bm25s
@@ -350,7 +362,58 @@ def delete_by_ids(ids: list[str], domain: str = "personal",
                                         "ids": owned_ids})
 
 
-if __name__ == "__main__":
+def invalidate(ids: list[str], domain: str = "personal", user_id: str = DEFAULT_USER_ID,
+               superseded_by: str | None = None) -> list[str]:
+    """Marks facts as no longer valid instead of deleting them, so the history
+    survives. Returns the IDs actually changed: only rows owned by this user
+    that were still valid, so the first invalid_at is never overwritten."""
+    _validate_domain(domain)
+    _validate_user_id(user_id)
+    collection = _get_collection(domain)
+    rows = collection.get(ids=ids, where=_where(user_id, None)) if ids else {}
+    changed = rows.get("ids") or []
+    if changed:
+        stamp = {"invalidated": True, "invalid_at": time.time()}
+        if superseded_by:
+            stamp["superseded_by"] = superseded_by
+        collection.update(ids=changed,
+                          metadatas=[{**(meta or {}), **stamp} for meta in rows.get("metadatas") or []])
+        _invalidate_keyword_index(domain)  # a metadata update keeps the count
+    log.info("memory_invalidated", extra={"domain": domain, "user_id": user_id, "ids": changed,
+                                            "superseded_by": superseded_by})
+    return changed
+
+
+def history(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_ID,
+            top_k: int = 10) -> list[dict]:
+    """Facts matching `query` including those no longer valid, each with a
+    "status" of current, superseded or retracted."""
+    items = retrieve(query, domain=domain, user_id=user_id, content_type="fact",
+                     top_k=top_k, include_invalidated=True)
+    for item in items:
+        meta = item["metadata"] or {}
+        item["status"] = ("current" if not meta.get("invalidated")
+                          else "superseded" if meta.get("superseded_by") else "retracted")
+    return items
+
+
+def format_history(items: list[dict]) -> str:
+    def day(stamp):
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(stamp)) if stamp else "unknown"
+
+    lines = []
+    for item in items:
+        meta = item["metadata"] or {}
+        line = f"[{item['status']}] {item['text']}  (valid from {day(meta.get('valid_at') or meta.get('timestamp'))}"
+        if meta.get("invalidated"):
+            line += f", until {day(meta.get('invalid_at'))}"
+        if meta.get("superseded_by"):
+            line += f", replaced by {meta['superseded_by']}"
+        lines.append(line + f")  id={item['id']}")
+    return "\n".join(lines) or "No matching facts."
+
+
+def _self_test() -> None:
     print("=== Memory module self-test ===\n")
 
     # Store a fact and a conversation turn
@@ -370,3 +433,21 @@ if __name__ == "__main__":
         print(f"  [{r['metadata']['content_type']}] {r['text']}")
 
     print("\n=== Phase 5 self-test complete ===")
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Zedek memory tools")
+    parser.add_argument("--history", metavar="QUERY",
+                        help="list matching facts, including superseded and retracted ones (read-only)")
+    parser.add_argument("--domain", default="personal", choices=sorted(ALLOWED_DOMAINS))
+    parser.add_argument("--self-test", action="store_true",
+                        help="store three sample rows and query them (writes to the store)")
+    args = parser.parse_args()
+
+    if args.history:
+        print(format_history(history(args.history, domain=args.domain)))
+    elif args.self_test:
+        _self_test()
+    else:
+        parser.print_help()

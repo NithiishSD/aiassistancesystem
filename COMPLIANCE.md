@@ -56,7 +56,7 @@ it all maps onto what the obligations would require:
 | DPDP obligation | Already in place |
 |---|---|
 | Data-principal separation | `user_id` is threaded through every memory row from day one. |
-| Correction and erasure | `_handle_correction()` + `memory.delete_by_ids()`; the planned bi-temporal schema (Roadmap A2) adds an auditable history of changes. |
+| Correction and erasure | `_handle_correction()` marks a corrected or retracted fact as no longer valid (`memory.invalidate()`), which keeps a dated history of changes and stops the fact being used. **History is still personal data:** erasure is `python memory_hygiene.py --purge-invalidated --apply` (or `memory.delete_by_ids()`), and a spoken "delete that" does not erase by itself — the reply says so. |
 | Security safeguards | Encrypted vault (Fernet + PBKDF2, 0600), password gate with lockout, tier gate, sandboxed execution. |
 | Audit trail | Watchdog writes an append-only JSONL trail with sensitive values redacted before they reach disk. |
 | Data minimisation | Session turns are distilled rather than stored raw; memory hygiene rejects non-facts. |
