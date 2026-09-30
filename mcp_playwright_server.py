@@ -47,6 +47,11 @@ _USER_AGENT = (
 # Hard cap on returned text content (characters).
 _TEXT_MAX_CHARS = 6_000
 
+# The page's real links follow the text after this line, one per line. The web
+# agent reads them so its page reader picks real links instead of guessing.
+LINKS_MARKER = "--- links on this page ---"
+_LINKS_MAX = 40
+
 # ── SSRF blocklist (same rules as mcp_online_server) ─────────────────────────
 
 _BLOCKED_NETWORKS = [
@@ -115,6 +120,28 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + f"\n\n[... truncated at {max_chars} characters]"
 
 
+def _format_links(hrefs: list) -> str:
+    """The marked link block: absolute http(s) links, de-duplicated, capped."""
+    links: list[str] = []
+    for href in hrefs or []:
+        if not isinstance(href, str):
+            continue
+        href = href.strip()
+        if urlparse(href).scheme in ("http", "https") and href not in links and "\n" not in href:
+            links.append(href)
+        if len(links) >= _LINKS_MAX:
+            break
+    return f"\n\n{LINKS_MARKER}\n" + "\n".join(links) if links else ""
+
+
+async def _page_links(page) -> str:
+    try:
+        hrefs = await page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    except Exception:
+        return ""
+    return _format_links(hrefs)
+
+
 # ── Playwright async helpers ───────────────────────────────────────────────────
 
 async def _with_page(url: str, action):
@@ -173,7 +200,7 @@ def browser_navigate(url: str) -> str:
     async def _action(page):
         title = await page.title()
         body_text = await page.inner_text("body")
-        return f"Title: {title}\n\n{_truncate(body_text, _TEXT_MAX_CHARS)}"
+        return f"Title: {title}\n\n{_truncate(body_text, _TEXT_MAX_CHARS)}" + await _page_links(page)
 
     try:
         return asyncio.run(_with_page(url, _action))
@@ -279,7 +306,8 @@ def browser_get_text(url: str, selector: str = "body") -> str:
             text = await page.inner_text(selector, timeout=5_000)
         except Exception as exc:
             return f"[error] Could not read text from '{selector}': {exc}"
-        return _truncate(text, _TEXT_MAX_CHARS)
+        links = await _page_links(page) if selector == "body" else ""
+        return _truncate(text, _TEXT_MAX_CHARS) + links
 
     try:
         return asyncio.run(_with_page(url, _action))

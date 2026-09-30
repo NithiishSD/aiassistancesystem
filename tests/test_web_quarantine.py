@@ -259,7 +259,8 @@ class TestDomainAllowlist:
 
     def test_admit_resolves_relative_links_then_checks(self):
         admitted = WebAgent()._admit(Extraction(False, "/docs/intro", None, ""),
-                                     "https://example.com/home", self.DOMAINS)
+                                     "https://example.com/home", self.DOMAINS,
+                                     links=["https://example.com/docs/intro"])
         assert admitted.next_url == "https://example.com/docs/intro"
 
 
@@ -357,3 +358,107 @@ class TestSummaryPath:
             WebAgent().summarize("g", [step])
         assert "​" not in captured["prompt"] and "‮" not in captured["prompt"]
         assert "raw" not in captured["prompt"]
+
+
+# ── Follow-ups from the live run (OpenSpec change: web-agent-stop-and-real-links) ──
+
+_READ = {"tool": "get_text", "target": "T1", "selector": None, "text": None, "done": False, "reason": ""}
+
+
+class TestStopsWhenSatisfied:
+    def _browse(self, satisfied):
+        agent = WebAgent(max_steps=3)
+        ok = lambda *a, **k: Step(index=1, tool="get_text", args={"url": "https://example.com"},
+                                  status="ok", observation="Example Domain")
+        with patch.object(WebAgent, "decide_next_action", return_value=_READ) as decide, \
+             patch.object(WebAgent, "execute_action", side_effect=ok), \
+             patch.object(WebAgent, "extract", return_value=Extraction(satisfied, None, None, "x")), \
+             patch.object(WebAgent, "summarize", return_value="s"):
+            report = agent.browse("read example.com")
+        return report, decide
+
+    def test_first_page_answers_the_goal(self):
+        report, decide = self._browse(satisfied=True)
+        assert len(report.steps) == 1 and decide.call_count == 1
+        assert report.completed and not any("limit" in n for n in report.notes)
+
+    def test_unsatisfied_keeps_going_to_the_limit(self):
+        report, decide = self._browse(satisfied=False)
+        assert len(report.steps) == 3 and decide.call_count == 3
+
+
+class TestRealLinksOnly:
+    DOMAINS = {"example.com"}
+    PAGE_RESULT = ("Example Domain\n\n" + web_agent.LINKS_MARKER + "\n"
+                   "https://example.com/docs\nhttps://evil.example/steal\n"
+                   "javascript:alert(1)\nhttps://example.com/docs\n" + INJECTION)
+
+    def test_split_links(self):
+        text, links = web_agent.split_links(self.PAGE_RESULT)
+        assert text.strip() == "Example Domain"
+        assert links == ["https://example.com/docs", "https://evil.example/steal"]
+
+    def test_no_marker_means_no_links(self):
+        assert web_agent.split_links("just text") == ("just text", [])
+
+    def test_link_cap(self):
+        many = web_agent.LINKS_MARKER + "\n" + "\n".join(f"https://example.com/{n}" for n in range(200))
+        assert len(web_agent.split_links(many)[1]) == web_agent.MAX_PAGE_LINKS
+
+    def test_invented_link_dropped_and_logged(self):
+        events = []
+        with patch.object(web_agent.log, "info", side_effect=lambda msg, extra=None: events.append((msg, extra))):
+            admitted = WebAgent()._admit(Extraction(False, "https://example.com/learn-more", None, ""),
+                                         "https://example.com", self.DOMAINS, links=["https://example.com/docs"])
+        assert admitted.next_url is None
+        assert ("web_page_url_rejected", {"reason": "not_a_page_link", "host": "example.com"}) in events
+
+    def test_real_link_admitted_ignoring_fragment_and_slash(self):
+        admitted = WebAgent()._admit(Extraction(False, "https://example.com/docs/#top", None, ""),
+                                     "https://example.com", self.DOMAINS, links=["https://example.com/docs"])
+        assert admitted.next_url == "https://example.com/docs/#top"
+
+    def test_no_link_list_offers_nothing(self):
+        admitted = WebAgent()._admit(Extraction(False, "https://example.com/docs", None, ""),
+                                     "https://example.com", self.DOMAINS)
+        assert admitted.next_url is None
+
+    def test_links_reach_extractor_filtered_and_never_the_planner(self):
+        prompts = {"planner": [], "extractor": []}
+        planner_answers = iter([_READ, {**_READ, "done": True}])
+
+        def fake_chat(messages, **kwargs):
+            prompt = messages[0]["content"]
+            if "driving a web browser" in prompt:
+                prompts["planner"].append(prompt)
+                return _llm(next(planner_answers))
+            prompts["extractor"].append(prompt)
+            return _llm({"goal_satisfied": False, "next_url": "https://example.com/docs",
+                         "click_selector": None, "excerpt": "Example Domain"})
+
+        with patch.object(web_agent.llm_provider, "generate_chat", side_effect=fake_chat), \
+             patch.object(web_agent.mcp_client, "get_tool_registry", return_value=_REGISTRY), \
+             patch.object(web_agent.mcp_client, "call_mcp_tool", return_value={"result": self.PAGE_RESULT}), \
+             patch.object(web_agent, "gate", return_value={"action": "auto", "tier": 1, "message": ""}), \
+             patch.object(WebAgent, "summarize", return_value="s"):
+            report = WebAgent(max_steps=2).browse("read example.com")
+
+        assert report.steps[0].links == ["https://example.com/docs", "https://evil.example/steal"]
+        assert report.steps[0].extraction.next_url == "https://example.com/docs"
+        assert "https://example.com/docs" in prompts["extractor"][0]
+        assert "evil.example" not in prompts["extractor"][0]
+        for prompt in prompts["planner"]:
+            assert "evil.example" not in prompt and "/docs" not in prompt and "Ignore previous" not in prompt
+        assert "a link on example.com" in prompts["planner"][1]
+
+
+class TestBrowserLinkBlock:
+    def test_format(self):
+        import mcp_playwright_server as server
+
+        block = server._format_links(["https://example.com/a", "mailto:x@example.com", None,
+                                      "https://example.com/a", " https://example.com/b "])
+        assert block == f"\n\n{server.LINKS_MARKER}\nhttps://example.com/a\nhttps://example.com/b"
+        assert server._format_links([]) == "" and server._format_links(["javascript:void(0)"]) == ""
+        assert server.LINKS_MARKER == web_agent.LINKS_MARKER
+        assert server._format_links([f"https://example.com/{n}" for n in range(99)]).count("https://") == server._LINKS_MAX

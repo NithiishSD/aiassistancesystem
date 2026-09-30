@@ -141,10 +141,12 @@ B3–B5 are hygiene. None of it is an emergency.*
 ### B1. Quarantine web-page content from the planner ✅ DONE 2026-09-29
 *Shipped as OpenSpec change `2026-09-29-quarantine-web-observations`; main spec in `openspec/specs/web-agent/`.*
 *Follow-ups from the live run:*
-- [ ] Stop deterministically when the latest ok step reports `goal_satisfied=True`. The planner ignored that instruction
-      and spent 3 steps (3 confirmations) reading one page.
-- [ ] Ask the extractor only for links as they appear on the page. It invented `example.com/learn-more`.
+- [x] Stop deterministically when the latest ok step reports `goal_satisfied=True`. The planner ignored that instruction
+      and spent 3 steps (3 confirmations) reading one page. *Done in OpenSpec `web-agent-stop-and-real-links`: the loop ends in code.*
+- [x] Ask the extractor only for links as they appear on the page. It invented `example.com/learn-more`.
       That is contained, since it is on the user's domain and labelled "from page content", but it is noise.
+      *Done in the same change: the browser tools now return the page's real links, the extractor picks from those on the
+      user's domains, and code drops any proposed URL that is not one of them. Checked live in Chromium on a local page.*
 
 `web_agent.decide_next_action()` pastes raw scraped page text (`observation[:400]`) into
 the prompt of the LLM that then **chooses the next tool and its arguments**. That is a
