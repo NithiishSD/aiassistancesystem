@@ -25,7 +25,7 @@ import ipaddress
 import re
 import socket
 import xml.etree.ElementTree as ET
-from urllib.parse import quote, quote_plus, urlparse
+from urllib.parse import urljoin, quote, quote_plus, urlparse
 
 import httpx
 
@@ -96,17 +96,49 @@ def _ssrf_check(url: str) -> str | None:
     for family, _type, _proto, _canonname, sockaddr in addr_infos:
         raw_ip = sockaddr[0]
         try:
-            ip = ipaddress.ip_address(raw_ip)
+            ip = ipaddress.ip_address(raw_ip.split("%", 1)[0])  # drop an IPv6 zone id
         except ValueError:
-            continue
-        for net in _BLOCKED_NETWORKS:
-            if ip in net:
-                return (
-                    f"URL resolves to a private/reserved address "
-                    f"({raw_ip}) and cannot be fetched."
-                )
+            return f"Unparseable address '{raw_ip}' for '{host}'."  # fail closed
+        if _ip_blocked(ip):
+            return (
+                f"URL resolves to a private/reserved address "
+                f"({raw_ip}) and cannot be fetched."
+            )
 
     return None  # URL is safe
+
+
+def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Only globally routable unicast addresses may be fetched. The explicit list
+    above missed 0.0.0.0 (reaches localhost on Linux), 100.64.0.0/10 (CGNAT),
+    198.18.0.0/15 and IPv4-mapped IPv6 such as ::ffff:127.0.0.1."""
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return (not ip.is_global) or ip.is_multicast or any(ip in net for net in _BLOCKED_NETWORKS)
+
+
+_MAX_REDIRECTS = 5
+_REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+
+def _get_checked(client: httpx.Client, url: str, headers: dict[str, str]) -> httpx.Response | str:
+    """GET that follows redirects by hand and re-runs the SSRF check on every
+    hop; automatic redirects let a public URL bounce to 169.254.169.254 or
+    localhost after the first check. Returns the final response or a
+    "[blocked] ..." string."""
+    for _ in range(_MAX_REDIRECTS + 1):
+        err = _ssrf_check(url)
+        if err:
+            return f"[blocked] {err}"
+        response = client.get(url, headers=headers, follow_redirects=False)
+        if response.status_code not in _REDIRECT_CODES:
+            return response
+        location = response.headers.get("location")
+        if not isinstance(location, str) or not location:
+            return response
+        url = urljoin(url, location)
+    return f"[blocked] Too many redirects (more than {_MAX_REDIRECTS})."
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -160,13 +192,15 @@ def fetch_url(url: str) -> str:
         return f"[blocked] {ssrf_err}"
 
     try:
-        with httpx.Client(timeout=_HTTPX_TIMEOUT, follow_redirects=True) as client:
-            response = client.get(url, headers={"User-Agent": _USER_AGENT})
+        with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
+            response = _get_checked(client, url, {"User-Agent": _USER_AGENT})
     except httpx.TimeoutException:
         return "[error] Request timed out."
     except httpx.RequestError as exc:
         return f"[error] Network error: {exc}"
 
+    if isinstance(response, str):
+        return response
     if response.status_code != 200:
         return f"[error] Server returned HTTP {response.status_code}."
 
@@ -319,13 +353,15 @@ def search_arxiv(query: str, max_results: int = 3) -> str:
     }
 
     try:
-        with httpx.Client(timeout=_HTTPX_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(search_url, headers=headers)
+        with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
+            resp = _get_checked(client, search_url, headers)
     except httpx.TimeoutException:
         return "[error] arXiv search request timed out."
     except httpx.RequestError as exc:
         return f"[error] Network error while searching arXiv: {exc}"
 
+    if isinstance(resp, str):
+        return resp
     if resp.status_code != 200:
         return f"[error] arXiv API returned HTTP {resp.status_code}."
 
