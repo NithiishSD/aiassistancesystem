@@ -23,6 +23,7 @@ from text_sanitizer import model_facing_description
 from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import LLM_RISK_TIERS, gate
+import confirmation
 import memory
 import memory_hygiene
 import capabilities
@@ -1044,10 +1045,9 @@ def _handle_academic_tracking(decision: RoutingDecision) -> str:
     return academic_tracker.format_recommendations(ACADEMIC_TRACKER.recommend())
 
 
-def _interactive_confirm(message: str) -> bool:
-    """Terminal confirmation prompt used for Tier 2 browser actions."""
-    print(message)
-    return input("> ").strip().lower() == "y"
+def _interactive_confirm(message: str) -> confirmation.Answer:
+    """Ask the user through the active confirmation channel (terminal by default)."""
+    return confirmation.ask(message)
 
 
 def _handle_web_task(decision: RoutingDecision) -> str:
@@ -1110,14 +1110,14 @@ def _execute_mcp_tool(decision: RoutingDecision) -> str:
     if gate_decision["action"] == "blocked":
         return gate_decision["message"]
     if gate_decision["action"] == "confirm":
-        print(gate_decision["message"])
-        answer = input("> ").strip().lower()
-        if answer != "y":
-            log.info("mcp_tool_confirmation_denied", extra={"qualified_name": qualified_name})
+        answer = _interactive_confirm(gate_decision["message"])
+        if not answer:
+            log.info("mcp_tool_confirmation_denied", extra={
+                "qualified_name": qualified_name, "reason": getattr(answer, "reason", "")})
             return "Cancelled."
         log.info("mcp_tool_confirmation_granted", extra={"qualified_name": qualified_name})
     if gate_decision["action"] == "notify":
-        print(gate_decision["message"])
+        confirmation.notify(gate_decision["message"])
 
     result = mcp_client.call_mcp_tool(qualified_name, tool_args)
     if result.get("error"):
@@ -1182,6 +1182,24 @@ def _run_general_question(decision: RoutingDecision, domain: str) -> str:
     return answer_general_question(decision.user_input, domain)
 
 
+MAX_PLAN_REVISIONS = 2
+
+
+def _format_coding_plan(plan: dict) -> str:
+    """The plan as one message, so any confirmation channel can show it."""
+    lines = ["", "=" * 60, "📋 CODING PLAN", "=" * 60, f"Goal: {plan.get('goal', 'N/A')}", "", "Steps:"]
+    lines += [f"  {i}. {step}" for i, step in enumerate(plan.get("steps", []), 1)]
+    if plan.get("files_to_create"):
+        lines.append(f"\nNew files: {', '.join(plan['files_to_create'])}")
+    if plan.get("files_to_modify"):
+        lines.append(f"Modify: {', '.join(plan['files_to_modify'])}")
+    if plan.get("risks"):
+        lines.append(f"\n⚠️  Risks: {', '.join(plan['risks'])}")
+    lines.append(f"\nConstraints: {', '.join(plan.get('constraints', []))}")
+    lines += ["=" * 60, "Approve this plan? (y, or n with what to change)"]
+    return "\n".join(lines)
+
+
 def _run_coding_task(decision: RoutingDecision, domain: str) -> str:
     original_input = decision.user_input
     # ── Checkpoint 1: Tier gate ──────────────────────────────────────
@@ -1189,34 +1207,31 @@ def _run_coding_task(decision: RoutingDecision, domain: str) -> str:
     if coding_gate["action"] == "blocked":
         return coding_gate["message"]
     if coding_gate["action"] == "confirm":
-        print(coding_gate["message"])
-        if input("> ").strip().lower() != "y":
+        if not _interactive_confirm(coding_gate["message"]):
             log.info("coding_task_confirmation_denied", extra={})
             return "Cancelled."
         log.info("coding_task_confirmation_granted", extra={})
 
     # ── Checkpoint 2: Plan approval ──────────────────────────────────
-    plan = CODING_SPECIALIST.plan_task(original_input)
-    print("\n" + "=" * 60)
-    print("📋 CODING PLAN")
-    print("=" * 60)
-    print(f"Goal: {plan.get('goal', 'N/A')}")
-    print("\nSteps:")
-    for i, step in enumerate(plan.get('steps', []), 1):
-        print(f"  {i}. {step}")
-    if plan.get('files_to_create'):
-        print(f"\nNew files: {', '.join(plan['files_to_create'])}")
-    if plan.get('files_to_modify'):
-        print(f"Modify: {', '.join(plan['files_to_modify'])}")
-    if plan.get('risks'):
-        print(f"\n⚠️  Risks: {', '.join(plan['risks'])}")
-    print(f"\nConstraints: {', '.join(plan.get('constraints', []))}")
-    print("=" * 60)
-    print("Approve this plan? (y/n)")
-    if input("> ").strip().lower() != "y":
-        log.info("coding_plan_rejected", extra={"goal": plan.get("goal", "")})
-        return "Plan rejected. No code was generated or modified."
-    log.info("coding_plan_approved", extra={"goal": plan.get("goal", "")})
+    # A refusal with a reason ("don't touch config.py") gets a revised plan
+    # instead of a dead end; a bare "n" ends here. Nothing is generated until
+    # a plan is approved.
+    plan_request = original_input
+    revisions = 0
+    while True:
+        plan = CODING_SPECIALIST.plan_task(plan_request)
+        answer = _interactive_confirm(_format_coding_plan(plan))
+        if answer:
+            break
+        reason = getattr(answer, "reason", "")
+        log.info("coding_plan_rejected", extra={"goal": plan.get("goal", ""), "reason": reason,
+                                               "revisions": revisions})
+        if not reason or revisions >= MAX_PLAN_REVISIONS:
+            return "Plan rejected. No code was generated or modified."
+        revisions += 1
+        plan_request = (f"{original_input}\n\nThe user rejected the previous plan "
+                        f"(goal: {plan.get('goal', 'N/A')}) and said: {reason}")
+    log.info("coding_plan_approved", extra={"goal": plan.get("goal", ""), "revisions": revisions})
 
     # Execution verified: plan approved by user
     if decision.via_llm:
@@ -1241,7 +1256,7 @@ def _run_coding_task(decision: RoutingDecision, domain: str) -> str:
 
     # Show result summary
     summary = format_coding_result(result)
-    print(summary)
+    confirmation.notify(summary)
 
     # ── Watchdog: does the patch target a file the plan declared? ────
     target_file = (result.get("patch") or {}).get("target_file", "")
@@ -1267,12 +1282,10 @@ def _run_coding_task(decision: RoutingDecision, domain: str) -> str:
         elif review:
             review_note = f" (LLM reviewer flagged issues: {', '.join(review.get('issues', []))})"
 
-        print(f"\n{'=' * 60}")
-        print(f"💾 APPLY CHANGES?{review_note}")
-        print(f"Target: {result['patch'].get('target_file', 'N/A')}")
-        print(f"{'=' * 60}")
-        print("Write this code to the file? (y/n)")
-        if input("> ").strip().lower() == "y":
+        if _interactive_confirm(
+                f"\n{'=' * 60}\n💾 APPLY CHANGES?{review_note}\n"
+                f"Target: {result['patch'].get('target_file', 'N/A')}\n{'=' * 60}\n"
+                "Write this code to the file? (y/n)"):
             apply_result = CODING_SPECIALIST.apply_patch(result["patch"])
             if apply_result["applied"]:
                 backup_note = f" Backup at: {apply_result['backup']}" if apply_result.get("backup") else ""
@@ -1455,15 +1468,15 @@ def _run_native_function(decision: RoutingDecision, domain: str) -> str:
         return gate_decision["message"]
 
     if gate_decision["action"] == "confirm":
-        print(gate_decision["message"])
-        answer = input("> ").strip().lower()
-        if answer != "y":
-            log.info("tier2_confirmation_denied", extra={"function": func_name})
+        answer = _interactive_confirm(gate_decision["message"])
+        if not answer:
+            log.info("tier2_confirmation_denied", extra={
+                "function": func_name, "reason": getattr(answer, "reason", "")})
             return "Cancelled."
         log.info("tier2_confirmation_granted", extra={"function": func_name})
 
     if gate_decision["action"] == "notify":
-        print(gate_decision["message"])
+        confirmation.notify(gate_decision["message"])
 
     try:
         result = AVAILABLE_FUNCTIONS[func_name](**args)

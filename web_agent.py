@@ -221,6 +221,7 @@ class Step:
     reason: str = ""
     extraction: Extraction | None = None
     provenance: dict[str, str] = field(default_factory=dict)
+    feedback: str = ""  # the user's own reason for refusing this action, if they gave one
     links: list[str] = field(default_factory=list)  # real links on the page (untrusted)
 
     def to_dict(self) -> dict[str, Any]:
@@ -428,6 +429,10 @@ Return ONLY a JSON object with exactly these keys:
     @staticmethod
     def _describe_step(step: Step) -> str:
         extraction = step.extraction
+        if step.status == "denied" and step.feedback:
+            # The user's own words (typed at the confirmation prompt), not page content.
+            return (f"Step {step.index}: {step.tool} on {_host(step.args.get('url', '')) or '?'} "
+                    f"[REFUSED BY THE USER] The user said: \"{step.feedback}\"")
         return (
             f"Step {step.index}: {step.tool} on {_host(step.args.get('url', '')) or '?'} [{step.status}] "
             f"goal_satisfied={extraction.goal_satisfied if extraction else 'unknown'} "
@@ -477,7 +482,8 @@ Tools:
 Rules:
 - Choose exactly ONE action that makes progress, using only the IDs above.
 - If a step already shows goal_satisfied=True, or no target helps, set "done": true.
-- Do not repeat an action that already failed.
+- Do not repeat an action that already failed or that the user refused. If the user
+  refused a step and said why, choose an action that respects what they said, or set "done": true.
 
 Return ONLY valid JSON:
 {{"tool": "get_text", "target": "T1", "selector": null, "text": null, "done": false, "reason": "why"}}"""
@@ -621,10 +627,14 @@ Return ONLY valid JSON:
 
         if decision["action"] == "confirm":
             message = self._confirmation_message(decision.get("message", ""), alias, args, provenance)
-            if not confirm_fn(message):
-                log.info("web_action_confirmation_denied", extra={"tool": qualified_name})
+            answer = confirm_fn(message)
+            if not answer:
+                # confirm_fn may return a plain bool or a confirmation.Answer.
+                feedback = strip_invisible(str(getattr(answer, "reason", "") or "")).strip()[:300]
+                log.info("web_action_confirmation_denied", extra={"tool": qualified_name,
+                                                                  "with_reason": bool(feedback)})
                 return Step(index=index, tool=alias, args=args, status="denied", provenance=provenance,
-                            reason="You declined this browser action.")
+                            reason="You declined this browser action.", feedback=feedback)
             log.info("web_action_confirmation_granted", extra={"tool": qualified_name})
 
         result = mcp_client.call_mcp_tool(qualified_name, args)
@@ -683,6 +693,9 @@ Return ONLY valid JSON:
                 continue
 
             alias, args, provenance = resolved
+            if any(s.status == "denied" and s.tool == alias and s.args == args for s in steps):
+                notes.append("Stopped: the next proposed action was one you had already declined.")
+                break
             step = self.execute_action(
                 alias, args, goal, index, confirm,
                 provenance=provenance,
@@ -707,8 +720,11 @@ Return ONLY valid JSON:
                 break
 
             # A denied or blocked action means the user (or the gate) said no —
-            # stop rather than trying to route around the refusal.
-            if step.status in ("denied", "blocked"):
+            # stop rather than trying to route around the refusal. The one
+            # exception: the user refused AND said what they want instead, so
+            # the planner gets their words and may propose another action,
+            # which needs its own confirmation.
+            if step.status == "blocked" or (step.status == "denied" and not step.feedback):
                 notes.append(step.reason)
                 break
         else:

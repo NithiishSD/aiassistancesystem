@@ -205,8 +205,10 @@ workflow files**. The user saw nothing and the model read everything.
       at no extra inference cost. The effective tier is `max(rule tier, LLM risk)`, so the
       model can raise a tier but never lower it. That fits the tier gate's
       existing "lanes only raise" design.
-- [ ] Reject-with-feedback: a denied action goes back to the agent with the user's reason,
-      instead of ending the loop with no explanation.
+- [x] Reject-with-feedback: a denied action goes back to the agent with the user's reason,
+      instead of ending the loop with no explanation. *Done in OpenSpec `confirmation-channel`: answering "no, <reason>" to a
+      browser action gives the planner your words and it may propose another action (confirmed again); to a coding plan, you
+      get a revised plan (at most twice). A bare "n" still ends the task.*
 
 ---
 
@@ -292,9 +294,10 @@ no accuracy.
       the orchestrator is the product. (Open WebUI is a finished app wrapped around a
       model; wrong shape here.)
 
-### D5. Abstract the confirmation channel
+### D5. Abstract the confirmation channel ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `confirmation-channel` (main spec `openspec/specs/confirmation/`): `confirmation.ask()` / `notify()` with a replaceable channel (`use_channel`). Terminal is the default; `DenyChannel` refuses everything for runs with nobody to ask. Only "y"/"yes" approves; a channel that fails refuses. All seven orchestrator confirmations go through it, and the coding plan is one message.*
 `input()` is called directly, which blocks and can't work from voice or a UI.
-- [ ] A confirmation interface so the same gated flows work across terminal, UI, and voice.
+- [x] A confirmation interface so the same gated flows work across terminal, UI, and voice. *(The UI and voice channels themselves come with D4 and F9.)*
 
 ---
 
