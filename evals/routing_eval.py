@@ -103,7 +103,7 @@ def classify_offline(router, text: str) -> tuple[str, float]:
     if clf._is_unsupported_action_request(text):
         return "unsupported", 1.0
     name, score = clf._layer1_route_with(router, text)
-    if name and name != GENERAL and score >= clf.CONFIDENCE_THRESHOLD:
+    if name and name != GENERAL and score >= clf.intent_threshold(name):
         return name, score
     return ESCALATE, score
 

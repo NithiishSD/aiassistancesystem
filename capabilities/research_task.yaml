@@ -1,3 +1,4 @@
+# threshold 0.45, not the 0.55 default (ROADMAP A5, golden DEV slice): 7 correct / 0 wrong at 0.45 (3 at 0.55); highest wrong match 0.33.
 name: research_task
 summary: Research a topic from the web and papers, with sources.
 handler: _run_research_task
@@ -8,6 +9,7 @@ description: >-
   looked up rather than answered from memory. Examples: 'research what the latest papers say about transformers',
   'look this up online and cite your sources', 'find studies on spaced repetition', 'read https://example.com/article
   and summarize it'.
+threshold: 0.45
 utterances:
 - >-
   Research, investigate, look up, or gather sources on a topic from the internet, Wikipedia, arXiv, or

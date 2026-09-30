@@ -1,3 +1,4 @@
+# threshold 0.50, not the 0.55 default (ROADMAP A5, golden DEV slice): 8 correct / 0 wrong at 0.50 (7 at 0.55); highest wrong match 0.45.
 name: academic_tracking
 summary: Track courses, exams and assignments.
 handler: _run_academic_tracking
@@ -6,6 +7,7 @@ description: >-
   or failed a practice problem, asking which topics are weakest, what to study next, or how their progress
   and streak look. Examples: 'log that I solved a DP problem', 'I failed a graphs question today', 'what
   are my weak topics', 'what should I practice next', 'show my prep progress'.
+threshold: 0.5
 utterances:
 - >-
   Log, record, or review DSA and aptitude practice progress, problem-solving attempts, weak topics, study

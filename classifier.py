@@ -66,6 +66,14 @@ DOMAIN_ROUTE_THRESHOLD = 0.65
 # mentions into these routes; on DEV this raised local precision 94.4% -> 96.2%
 # for -0.5 points of coverage.
 STRICT_INTENT_THRESHOLDS = capabilities.strict_thresholds()  # `threshold:` in capabilities/*.yaml
+# The same table also holds intents calibrated BELOW the default (ROADMAP A5):
+# evals/calibrate_thresholds.py lowers a route's threshold only where the golden
+# DEV slice shows more correct local matches and no wrong one within 0.05.
+
+
+def intent_threshold(name: str | None) -> float:
+    """The Layer-1 score a route needs before it is trusted without the LLM."""
+    return STRICT_INTENT_THRESHOLDS.get(name or "", ROUTE_THRESHOLD)
 
 # Requests the user confirmed were "just a question" after a misroute
 # (orchestrator._heal_misroute). An exact repeat is answered directly: neither
@@ -672,7 +680,7 @@ def classify_intent(text: str) -> dict:
     layer1_name, top_score = _layer1_route_with(_intent_router, text)
     top_key = layer1_name or DEFAULT_INTENT
 
-    if top_score >= CONFIDENCE_THRESHOLD and top_key != DEFAULT_INTENT:
+    if top_key != DEFAULT_INTENT and top_score >= intent_threshold(top_key):
         func_value = top_key
         log.info("intent_classified_layer1",
                  extra={"text": text, "intent": top_key,

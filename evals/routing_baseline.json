@@ -3,14 +3,14 @@
     "golden_sha256": "d14353bb600fdb7024980863ea1adbf2b0b695ed0137f7fc01db7dcf865fdd4c",
     "static_phrase_count": 237,
     "semantic_router_version": "0.0.72",
-    "date": "2026-09-29",
+    "date": "2026-09-30",
     "slice": "test"
   },
   "per_class": {
     "academic_tracking": {
       "precision": 1.0,
-      "recall": 0.4545,
-      "f1": 0.625,
+      "recall": 0.5455,
+      "f1": 0.7059,
       "support": 11
     },
     "coding_task": {
@@ -69,14 +69,14 @@
     },
     "research_task": {
       "precision": 1.0,
-      "recall": 0.1818,
-      "f1": 0.3077,
+      "recall": 0.2727,
+      "f1": 0.4286,
       "support": 11
     },
     "search_files": {
       "precision": 1.0,
-      "recall": 0.3636,
-      "f1": 0.5333,
+      "recall": 0.7273,
+      "f1": 0.8421,
       "support": 11
     },
     "system_inspect": {
@@ -99,8 +99,8 @@
     },
     "web_task": {
       "precision": 1.0,
-      "recall": 0.5455,
-      "f1": 0.7059,
+      "recall": 0.8182,
+      "f1": 0.9,
       "support": 11
     },
     "general_question": {
@@ -110,6 +110,6 @@
       "support": 11
     }
   },
-  "accuracy": 0.5615,
-  "escalation_rate": 0.4813
+  "accuracy": 0.6096,
+  "escalation_rate": 0.4332
 }

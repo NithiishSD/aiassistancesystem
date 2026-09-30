@@ -124,10 +124,11 @@ collapses as tool count grows.
       choice, and whether an NLI check pays off all have to be measured here.
 - **No platform.** pytest + sklearn, both already present. DeepEval later *if* it hurts.
 
-### A5. Confidence calibration
+### A5. Confidence calibration ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `calibrate-intent-thresholds`. `evals/calibrate_thresholds.py` prints, per intent, correct/wrong DEV matches at each threshold (the reliability table) and recommends the lowest threshold 0.05 clear of any wrong match. Applied: `research_task`, `search_files`, `web_task` 0.45 and `academic_tracking` 0.50. **Held-out TEST: accuracy 0.561 → 0.610, LLM escalation 48.1% → 43.3%, no class loses precision.** Rejected by the held-out gate: `top_memory_processes` and `list_processes_detailed` at 0.45. Deliberately not lowered: `remember_fact`, `correct_fact` (a wrong match changes memory).*
 The known bug: a 0.403 score labelled "high confidence". Intent scores are documented to
 be bimodal and miscalibrated, clustering at >0.95 or <0.05 and skipping the middle.
-- [ ] Per-intent thresholds derived from a reliability diagram, replacing the single
+- [x] Per-intent thresholds derived from a reliability diagram, replacing the single
       global 0.35 cutoff.
 
 ---

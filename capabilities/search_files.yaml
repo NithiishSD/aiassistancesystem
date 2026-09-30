@@ -1,3 +1,4 @@
+# threshold 0.45, not the 0.55 default (ROADMAP A5, golden DEV slice): 10 correct / 0 wrong at 0.45 (7 at 0.55); highest wrong match 0.40.
 name: search_files
 summary: Find files and folders on this computer by name or type.
 handler: _run_native_function
@@ -5,6 +6,7 @@ description: >-
   User wants to find, locate, or search for a file or directory on the local filesystem by name, extension,
   or path pattern. Examples: 'find my resume', 'where is notes.txt', 'search for .cpp files'.
 tier: 0
+threshold: 0.45
 utterances:
 - >-
   Search, find, locate, discover, or list files, documents, scripts, and directories on the local disk

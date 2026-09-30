@@ -32,6 +32,39 @@ class TestThresholds:
         assert by_name["unsupported"] == 0.65
         assert by_name[clf.DEFAULT_INTENT] == clf.ROUTE_THRESHOLD
 
+    def test_calibrated_intents(self, static_router):
+        """ROADMAP A5: lowered only where the DEV slice showed gain with no wrong
+        match nearby, and the held-out gate passed (evals/calibrate_thresholds.py)."""
+        by_name = {r.name: r.score_threshold for r in static_router.routes}
+        assert {n: t for n, t in by_name.items() if t < clf.ROUTE_THRESHOLD} == {
+            "academic_tracking": 0.50, "research_task": 0.45, "search_files": 0.45, "web_task": 0.45}
+        # Intents whose wrong match acts on its own are never lowered.
+        for name in ("remember_fact", "correct_fact"):
+            assert by_name[name] == clf.ROUTE_THRESHOLD
+
+    def test_classify_intent_honours_the_per_intent_threshold(self, monkeypatch):
+        monkeypatch.setattr(clf, "_ROUTING_CACHE", {})
+        monkeypatch.setattr(clf, "query_llm_with_tools",
+                            lambda text: {"function": "LLM", "confidence": "high", "score": 1.0, "via_llm": True})
+        monkeypatch.setattr(clf, "_layer1_route_with", lambda router, text: ("research_task", 0.47))
+        assert clf.classify_intent("zz calibrated probe one")["function"] == "research_task"
+        monkeypatch.setattr(clf, "_layer1_route_with", lambda router, text: ("coding_task", 0.47))
+        assert clf.classify_intent("zz calibrated probe two")["function"] == "LLM"
+        monkeypatch.setattr(clf, "_layer1_route_with", lambda router, text: ("open_application", 0.60))
+        assert clf.classify_intent("zz calibrated probe three")["function"] == "LLM"
+        assert clf.intent_threshold(None) == clf.intent_threshold("coding_task") == clf.ROUTE_THRESHOLD
+
+    def test_calibration_never_recommends_below_the_floor_or_into_a_wrong_match(self):
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "evals"))
+        import calibrate_thresholds as cal
+
+        assert cal.recommend([(0.50, True), (0.30, True)], 0.55) == cal.FLOOR          # clean: floor, not 0.30
+        assert cal.recommend([(0.50, True), (0.46, False)], 0.55) == 0.55             # wrong match within margin
+        assert cal.recommend([(0.52, True), (0.41, False)], 0.55) == 0.50             # 0.41 + 0.05, rounded up
+        assert cal.recommend([(0.50, True), (0.70, False)], 0.55) == 0.55             # already wrong above: leave
+        assert cal.recommend([(0.60, True)], 0.55) == 0.55                            # nothing to gain
+
     def test_domain_router_keeps_its_own_threshold(self):
         domain = clf._build_domain_router()
         assert {r.score_threshold for r in domain.routes} == {clf.DOMAIN_ROUTE_THRESHOLD}

@@ -1,3 +1,4 @@
+# threshold 0.45, not the 0.55 default (ROADMAP A5, golden DEV slice): 10 correct / 0 wrong at 0.45 (8 at 0.55); no wrong match; every action is Tier 2.
 name: web_task
 summary: Browse a website for you (navigate, click, screenshot), confirming risky steps.
 handler: _run_web_task
@@ -7,6 +8,7 @@ description: >-
   interaction with a page rather than information gathered from sources. Every such action requires the
   user's explicit confirmation before it runs. Examples: 'open this site and click the login button',
   'type my email into the form on that page', 'take a screenshot of this web page'.
+threshold: 0.45
 utterances:
 - >-
   Drive a web browser to interact with a live web page: open a site, click a button or link, fill in and
