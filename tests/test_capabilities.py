@@ -88,6 +88,22 @@ def test_invalid_capability_refused(registry, changes):
         capabilities._load(str(registry))
 
 
+def test_overlong_description_refused(registry):
+    _edit(registry / "open_application.yaml", description="x" * (capabilities.MAX_DESCRIPTION_CHARS + 1))
+    with pytest.raises(capabilities.CapabilityError, match="limit"):
+        capabilities._load(str(registry))
+
+
+def test_routing_prompt_budget_enforced(registry, monkeypatch):
+    """Only names and descriptions reach the Layer-2 model, within a fixed budget."""
+    assert all(set(tool) == {"name", "description"} for tool in capabilities.router_tools())
+    used = sum(len(t["name"]) + len(t["description"]) for t in capabilities.router_tools())
+    assert used <= capabilities.PROMPT_BUDGET_CHARS
+    monkeypatch.setattr(capabilities, "PROMPT_BUDGET_CHARS", used - 1)
+    with pytest.raises(capabilities.CapabilityError, match="budget"):
+        capabilities._load(str(registry))
+
+
 def test_missing_file_refused(registry):
     (registry / "search_files.yaml").unlink()
     with pytest.raises(capabilities.CapabilityError, match="missing"):

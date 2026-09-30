@@ -673,6 +673,16 @@ Request: {user_input}"""
         return {}
 
 
+_BUNDLED_MCP_SERVER = "zedek_tools"
+_BUNDLED_TOOL_SHORTCUTS = (
+    (re.compile(r"\bwhat(?:'s| is)? (?:the )?(?:current )?(?:time|date|day)\b|\bcurrent (?:time|date)\b"
+                r"|\b(?:time|date|day) is it\b|\btoday'?s date\b"), ("time", "date")),
+    (re.compile(r"\b(?:count|how many) (?:the |all the )?(?:words?|characters?|chars|lines)\b|\bword count\b"),
+     ("word", "count")),
+    (re.compile(r"\bsummar\w*\b|\btl;?dr\b"), ("summar",)),
+)
+
+
 def _select_mcp_tool(user_input: str, target_tool_qname: str | None = None) -> mcp_client.MCPToolSpec | None:
     """Select which registered MCP tool best matches the request."""
     registry = mcp_client.get_tool_registry()
@@ -690,20 +700,14 @@ def _select_mcp_tool(user_input: str, target_tool_qname: str | None = None) -> m
         if tname in lowered:
             return spec
 
-    if any(w in lowered for w in ["time", "date", "clock", "today", "now"]):
-        for qname, spec in registry.items():
-            if "time" in spec.tool_name or "date" in spec.tool_name:
-                return spec
-
-    if any(w in lowered for w in ["word", "words", "count", "character", "chars", "lines", "length"]):
-        for qname, spec in registry.items():
-            if "word" in spec.tool_name or "count" in spec.tool_name:
-                return spec
-
-    if any(w in lowered for w in ["summar", "brief", "shorten", "overview", "tldr"]):
-        for qname, spec in registry.items():
-            if "summar" in spec.tool_name:
-                return spec
+    # Shortcuts for the bundled tools, so the commonest requests need no model
+    # call. Whole phrases only: matching "now" inside "snow" or "today" in
+    # "today's headlines" used to send weather and news requests to the clock.
+    for pattern, name_parts in _BUNDLED_TOOL_SHORTCUTS:
+        if pattern.search(lowered):
+            for qname, spec in registry.items():
+                if spec.server_name == _BUNDLED_MCP_SERVER and any(part in spec.tool_name for part in name_parts):
+                    return spec
 
     if len(registry) == 1:
         return next(iter(registry.values()))
@@ -722,10 +726,12 @@ def _select_mcp_tool(user_input: str, target_tool_qname: str | None = None) -> m
         for qname, spec in registry.items():
             if qname in chosen:
                 return spec
-    except Exception:
-        pass
+    except Exception as error:
+        log.info("mcp_tool_selection_failed", extra={"error_type": type(error).__name__})
 
-    return next(iter(registry.values())) if registry else None
+    # No tool was named: say so. Running whichever tool happens to be first in
+    # the registry would be an action nobody asked for.
+    return None
 
 
 def _extract_target_text(user_input: str) -> str:
@@ -1839,10 +1845,13 @@ def _repl_command(user_input: str) -> str | None:
     """REPL-only commands that are not routed requests. None if not one."""
     command = user_input.lower()
     if command in ("help", "/help", "?"):
-        return capabilities.help_text() + "\n\nAlso: 'digest' (today's digest), 'inbox' (scheduled-job results)."
+        return capabilities.help_text() + ("\n\nAlso: 'digest' (today's digest), 'inbox' (scheduled-job results), "
+                                            "'providers' (which model answered, quotas and cooldowns).")
     if command == "digest":
         import digest
         return digest.build_digest() or "Nothing to report today."
+    if command == "providers":
+        return llm_provider.format_last_answer_source() + "\n" + llm_provider.format_provider_stats()
     if command == "inbox":
         import scheduler
         entries = scheduler.read_inbox()[-5:]

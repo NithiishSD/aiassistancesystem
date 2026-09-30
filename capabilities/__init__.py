@@ -29,6 +29,12 @@ _ALLOWED_KEYS = {"name", "summary", "handler", "description", "threshold", "tier
                  "utterances", "short_examples", "runs_when_unsure", "voice"}
 _ARG_TYPES = {"int"}
 VOICE_HANDLER = "_run_native_function"
+# The Layer-2 model reads every capability's name and description on each
+# escalated request, so the list has a fixed size limit (ROADMAP E1). A new
+# capability that would exceed it stops startup instead of quietly growing
+# every routing prompt.
+MAX_DESCRIPTION_CHARS = 700
+PROMPT_BUDGET_CHARS = 8000
 
 
 class CapabilityError(ValueError):
@@ -86,6 +92,9 @@ def _parse(name: str, doc: Any) -> Capability:
     description = doc.get("description")
     if not isinstance(description, str) or not description.strip():
         raise CapabilityError(f"{where}: description is required")
+    if len(description) > MAX_DESCRIPTION_CHARS:
+        raise CapabilityError(f"{where}: description is {len(description)} characters; "
+                              f"the limit is {MAX_DESCRIPTION_CHARS}")
 
     threshold = doc.get("threshold")
     if threshold is not None and (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
@@ -139,6 +148,10 @@ def _load(directory: str = DIR) -> tuple[dict[str, Capability], tuple[str, ...],
     for name in llm_tools:
         with open(os.path.join(directory, f"{name}.yaml"), encoding="utf-8") as f:
             loaded[name] = _parse(name, yaml.safe_load(f))
+    prompt_chars = sum(len(n) + len(c.description) for n, c in loaded.items())
+    if prompt_chars > PROMPT_BUDGET_CHARS:
+        raise CapabilityError(f"capabilities/: names and descriptions total {prompt_chars} characters; "
+                              f"the routing prompt budget is {PROMPT_BUDGET_CHARS}")
     return loaded, routes, llm_tools
 
 

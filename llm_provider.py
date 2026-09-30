@@ -496,6 +496,7 @@ def _post_openai_compatible(
         timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
+    _note_headroom(source, getattr(response, "headers", None))
     data = response.json()
     if not data.get("choices"):
         _raise_embedded_error(source, data)
@@ -534,6 +535,7 @@ def _stream_openai_compatible(
     )
     try:
         response.raise_for_status()
+        _note_headroom(source, getattr(response, "headers", None))
         parts: list[str] = []
         reported: Any = None
         usage: dict[str, Any] = {}
@@ -890,6 +892,14 @@ DEFAULT_RATE_LIMIT_COOLDOWN = 60.0
 MIN_COOLDOWN = 1.0
 MAX_COOLDOWN = 3600.0
 AUTH_FAILURE_COOLDOWN = 3600.0
+# Below this many tokens left in the provider's current window, the next prompt
+# would be refused, so the provider is skipped until the window resets.
+MIN_TOKEN_HEADROOM = 1000
+# (remaining header, reset header, floor): at or below the floor, wait for the reset.
+_HEADROOM_HEADERS = (
+    ("x-ratelimit-remaining-requests", "x-ratelimit-reset-requests", 0),
+    ("x-ratelimit-remaining-tokens", "x-ratelimit-reset-tokens", MIN_TOKEN_HEADROOM - 1),
+)
 _DEFAULT_USAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "data", "provider_usage.json")
 _DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
@@ -923,6 +933,7 @@ def _reset_health_for_tests() -> None:
     with _health_lock:
         _health.clear()
     _DEAD_MODELS.clear()
+    _last_answer.clear()
 
 
 def _health_for(source: str) -> _ProviderHealth:
@@ -989,6 +1000,34 @@ def _cooldown_for(status: int | None, headers: Any) -> float:
         if seconds is not None:
             return min(max(seconds, MIN_COOLDOWN), MAX_COOLDOWN)
     return DEFAULT_RATE_LIMIT_COOLDOWN
+
+
+def _note_headroom(source: str, headers: Any) -> None:
+    """After a successful call: if the provider reports that its request or
+    token allowance is used up, skip it until the reset it reports, instead of
+    sending the next request to find out (ROADMAP C2)."""
+    try:
+        lowered = {str(k).lower(): v for k, v in dict(headers or {}).items()}
+    except (TypeError, ValueError):
+        return
+    wait = 0.0
+    for remaining_header, reset_header, floor in _HEADROOM_HEADERS:
+        try:
+            remaining = int(str(lowered.get(remaining_header)).strip())
+        except ValueError:  # header absent or not a count
+            continue
+        if remaining > floor:
+            continue
+        seconds = _parse_duration(lowered.get(reset_header))
+        seconds = DEFAULT_RATE_LIMIT_COOLDOWN if seconds is None else seconds
+        wait = max(wait, min(max(seconds, MIN_COOLDOWN), MAX_COOLDOWN))
+    if wait <= 0:
+        return
+    with _health_lock:
+        health = _health_for(source)
+        health.cooldown_until = max(health.cooldown_until, _now() + wait)
+    log.info("provider_cooldown_started", extra={"source": source, "status": "allowance_used_up",
+                                                 "seconds": round(wait, 1)})
 
 
 def _is_not_configured(error: Exception) -> bool:
@@ -1073,6 +1112,13 @@ def format_provider_stats(stats: dict[str, dict[str, Any]] | None = None) -> str
     return "\n".join(lines)
 
 
+def format_last_answer_source() -> str:
+    last = last_answer_source()
+    if not last:
+        return "No answer from a model yet in this session."
+    return f"Last answer: {last['source']}" + (f" ({last['model']})" if last.get("model") else "")
+
+
 def strip_thinking_tags(text: str) -> str:
     """Remove reasoning/thinking traces (<think>...</think>) from LLM outputs."""
     if not isinstance(text, str):
@@ -1115,7 +1161,17 @@ def _log_gen_ai_call(source: str, reply: "ProviderReply", started: float, task: 
     })
 
 
+_last_answer: dict[str, Any] = {}
+
+
+def last_answer_source() -> dict[str, Any]:
+    """Which provider and model produced the most recent answer ({} before the first)."""
+    return dict(_last_answer)
+
+
 def _result(answer: str, source: str, reply: "ProviderReply") -> dict[str, Any]:
+    _last_answer.clear()
+    _last_answer.update({"source": source, "model": reply.response_model})
     return {
         "answer": answer,
         "source": source,

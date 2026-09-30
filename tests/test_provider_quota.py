@@ -222,3 +222,77 @@ class TestReporting:
         text = lp.format_provider_stats()
         assert len(text.splitlines()) == 2
         assert text.startswith("gemini: today 1")
+
+
+# ── Allowance headers on successful replies (OpenSpec change: provider-headroom) ──
+
+def _ok_response(headers):
+    response = MagicMock()
+    response.headers = headers
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"choices": [{"message": {"content": "ok"}}], "model": "m"}
+    return response
+
+
+class TestHeadroom:
+    @pytest.mark.parametrize("headers, expected", [
+        ({"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "1m26.4s"}, 86.4),
+        ({"X-RateLimit-Remaining-Tokens": "412", "X-RateLimit-Reset-Tokens": "4.364s"}, 4.364),
+        ({"x-ratelimit-remaining-requests": "0"}, lp.DEFAULT_RATE_LIMIT_COOLDOWN),
+        ({"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "48h"}, lp.MAX_COOLDOWN),
+        ({"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "2m",
+          "x-ratelimit-remaining-tokens": "10", "x-ratelimit-reset-tokens": "5s"}, 120.0),
+    ])
+    def test_used_up_allowance_starts_a_cooldown(self, headers, expected):
+        lp._note_headroom("groq", headers)
+        assert lp.provider_stats()["groq"]["cooldown_remaining_s"] == pytest.approx(expected, abs=0.1)
+
+    @pytest.mark.parametrize("headers", [
+        {}, None, {"x-ratelimit-remaining-requests": "999", "x-ratelimit-remaining-tokens": "7418"},
+        {"x-ratelimit-remaining-requests": "many"}, {"x-ratelimit-remaining-tokens": str(lp.MIN_TOKEN_HEADROOM)},
+    ])
+    def test_room_left_or_no_headers_changes_nothing(self, headers):
+        lp._note_headroom("groq", headers)
+        assert lp.provider_stats()["groq"]["cooldown_remaining_s"] == 0
+
+    def test_headroom_never_shortens_a_longer_cooldown(self, _fresh):
+        lp._record_failure("groq", _http_error(401))
+        lp._note_headroom("groq", {"x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "2s"})
+        assert lp.provider_stats()["groq"]["cooldown_remaining_s"] == pytest.approx(lp.AUTH_FAILURE_COOLDOWN)
+
+    def test_provider_is_skipped_after_a_reply_that_used_the_last_request(self, monkeypatch, _fresh):
+        posts = {"n": 0}
+
+        def fake_post(url, **kwargs):
+            posts["n"] += 1
+            return _ok_response({"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "30s"})
+
+        monkeypatch.setattr(lp.requests, "post", fake_post)
+
+        def groq(messages, json_mode):
+            return lp._openai_compatible("groq", "https://example.invalid/v1", "key", "m", messages, json_mode)
+
+        _chain(monkeypatch, {"groq": groq}, chain=("groq", "local"))
+        assert lp.generate_chat(MSG, task="t")["source"] == "groq"      # answered, and reported 0 left
+        assert lp.generate_chat(MSG, task="t")["source"] == "local"     # skipped without a request
+        assert posts["n"] == 1
+        _fresh["t"] += 31
+        assert lp.generate_chat(MSG, task="t")["source"] == "groq"
+        assert posts["n"] == 2
+
+
+class TestLastAnswerSource:
+    def test_reports_the_provider_that_answered(self, monkeypatch):
+        assert lp.format_last_answer_source().startswith("No answer")
+        _chain(monkeypatch, {"gemini": _counting(error=_http_error(500)), "groq": _counting(answer="ok")})
+        lp.generate_chat(MSG, task="t")
+        assert lp.last_answer_source()["source"] == "groq"
+        assert lp.format_last_answer_source().startswith("Last answer: groq")
+
+    def test_providers_command(self, monkeypatch):
+        import orchestrator
+
+        _chain(monkeypatch, {"gemini": _counting(answer="ok")}, chain=("gemini", "local"))
+        lp.generate_chat(MSG, task="t")
+        reply = orchestrator._repl_command("providers")
+        assert reply.splitlines()[0].startswith("Last answer: gemini") and "gemini: today 1" in reply

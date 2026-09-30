@@ -14,7 +14,7 @@ plan. That file is kept for history; this one is the plan.
 
 ## Where the project actually stands
 
-**Built and tested:** 28 modules, 488 tests passing. Phases 1–6 (environment, logging,
+**Built and tested (2026-09-30):** 43 modules, 1,482 tests passing, 22 specs in `openspec/specs/`. Phases 1–6 (environment, logging,
 orchestrator + system agent, tier gate, long-term memory, session context) and Roadmap
 Items 1–14 (MCP client + 7 servers, sandboxed execution, evaluator agent, task planner,
 research agent, web agent, watchdog, security module, wake-word, academic tracking) are
@@ -46,6 +46,13 @@ contentless.
    five providers actually answered.
    *Status: fixed — see Phases C1 and C2.*
 6. **Not proactive.** It only ever speaks when spoken to.
+   *Status: fixed — see Phase D1.*
+
+**Still open (2026-09-30):** the two A2 follow-ups (superseding on remember, "as of"
+questions), F10 (local citation check, to be measured first), static-first prompts for
+the specialist agents (F5), and three things only the owner can do: the optional
+live-store cleanups (A1), trying voice with a real voice (D2, F9), and the Cerebras
+account (C3).
 
 ---
 
@@ -108,14 +115,14 @@ as substrings, so "type…", "…capacity…", "facebook", and "book…" never r
 Routing is the historical failure point and is completely unmeasured. ~16 intents and 27
 MCP tools now compete for phrasings; measured industry data shows routing accuracy
 collapses as tool count grows.
-- [ ] `evals/routing_golden.csv` — 200+ labelled utterances, **min 20 per intent**,
+- [x] `evals/routing_golden.csv` — 200+ labelled utterances, **min 20 per intent**,
       held-out test slice that never leaks into tuning.
-- [ ] pytest + `sklearn.metrics.classification_report` / `confusion_matrix`. The
+- [x] pytest + `sklearn.metrics.classification_report` / `confusion_matrix`. The
       **confusion matrix is the primary artifact** — aggregate accuracy hides exactly the
       class-level failures that matter.
-- [ ] CI gate: fail if any class drops >2 points precision against baseline.
-- [ ] Promote real misroutes into the set as they happen (~10 min/week). *Corrected misroutes are now logged to `data/misroutes.jsonl` (gitignored) by `self-correcting-routing`; promoting them is still by hand.*
-- [ ] **"Must stay local" list.** Utterances the classifier must never send to the LLM
+- [x] CI gate: fail if any class drops >2 points precision against baseline. *(A pytest gate on precision and recall; there is no CI service, so it runs with the suite.)*
+- [x] Promote real misroutes into the set as they happen (~10 min/week). *Corrected misroutes are logged to `data/misroutes.jsonl` (gitignored) by `self-correcting-routing`. `python evals/promote_misroutes.py` lists the new ones and, with `--apply`, adds them to the DEV slice (never TEST); read each row first, since the golden set is public.*
+- [x] **"Must stay local" list.** Utterances the classifier must never send to the LLM
       fallback. Home Assistant shipped a regression (issue #139415) that sent every
       command to the LLM. A test list like this would have caught it.
 - [x] **Retrieval eval set: 30–50 real queries with the facts or sources they should
@@ -161,11 +168,11 @@ confirmation via an *injected* `confirm_fn` that defaults to deny, so the agent
 structurally cannot self-approve; allowlist and URL validation run before the gate; a
 denied action ends the loop. The residual gap is that "run `click` on `<url>`?" invites
 rubber-stamping when the URL itself was chosen by injected text.
-- [ ] **Dual-LLM pattern**: a separate, tool-less call reads page content and returns
+- [x] **Dual-LLM pattern**: a separate, tool-less call reads page content and returns
       typed fields (`{found: bool, next_url: str|null}`); the planner never sees raw text.
-- [ ] Validate `next_url` against a domain allowlist derived from the user's *original*
+- [x] Validate `next_url` against a domain allowlist derived from the user's *original*
       goal.
-- [ ] Show in the confirmation prompt when a target came from page content rather than
+- [x] Show in the confirmation prompt when a target came from page content rather than
       from the user.
 - **Do not rely on a detector model** — guardrail classifiers fail >90% under adaptive
   pressure. Enforcement belongs in deterministic code.
@@ -180,6 +187,7 @@ Tier 1. **That lane fails open.**
 - [x] Make `default_tier` in `mcp_servers.json` mandatory per server and treat it as the
       floor, rather than inferring risk from prose.
 - [x] Hash/version-lock servers; detect metadata drift ("rug pull").
+- [x] *Found 2026-09-30 (OpenSpec `roadmap-leftovers`):* tool selection matched keywords inside other words ("now" in "snow", "today" in "today's headlines" ran the clock), and when the tool-picking model named no tool, the first tool in the registry ran. Shortcuts now match whole phrases and only bundled tools; no named tool means nothing runs.
 
 ### B3. Keep API keys out of the sandbox ✅ DONE 2026-09-30
 *Shipped as OpenSpec change `sandbox-secret-scrub`. The child environment was already clean; keys still reached sandboxed code through files. Secret files (`.env`, `*.pem`, `id_*`, `credentials*.json`, …) are now left out of the copy-on-write mirror and masked under bubblewrap's read-only project mode, and secret-looking `extra_env` names are dropped. **Found while testing: bubblewrap had never run.** Its probe lacked `/lib`, so every run silently used the rlimit fallback; behind that, `RLIMIT_NPROC=64` counted all of the user's ~1,800 threads, `--clearenv` dropped the runner's environment, and read-only mode lacked `PYTHONPATH`. All fixed, so sandboxed code now really runs with no network, a private /tmp and a read-only system.*
@@ -229,16 +237,16 @@ workflow files**. The user saw nothing and the model read everything.
 *Shipped as OpenSpec change `add-provider-quota-awareness`: 429/401 cooldowns, a persisted daily budget (openrouter 50/day), OpenRouter moved off the head of every chain, `provider_stats()`, and skips logged with reasons. Token and cost accounting move to C1 with the `gen_ai.*` fields.*
 Five free-tier providers with silent fallthrough: when Gemini hits quota there is no way
 to tell whether an answer came from Gemini or the local 8B. That's an invisible accuracy cliff.
-- [ ] Per-provider call/token counters; surface `last_provider` in responses.
-- [ ] Cooldown after 429 so an exhausted provider isn't hammered.
-- [ ] Keep the fallback chain **bounded** — unbounded chains cause cascading retry storms
+- [x] Per-provider call/token counters; surface `last_provider` in responses. *(`providers` in the REPL shows which provider and model gave the last answer, plus the usage report; OpenSpec `roadmap-leftovers`.)*
+- [x] Cooldown after 429 so an exhausted provider isn't hammered.
+- [x] Keep the fallback chain **bounded** — unbounded chains cause cascading retry storms
       when every provider 429s at once.
-- [ ] **Move OpenRouter off the head of `process_reasoning`.** OpenRouter's `:free` tier
+- [x] **Move OpenRouter off the head of `process_reasoning`.** OpenRouter's `:free` tier
       allows **50 requests/day** (1,000 only after buying $10 of credit), which is verified
       against its docs. Yet `TASK_PROVIDERS["process_reasoning"]` lists it first, so the
       most quota-scarce provider gets hit first. Order chains by quota headroom, not habit.
-- [ ] Read rate-limit headers and skip providers that are expected to be exhausted,
-      instead of calling them to find out.
+- [x] Read rate-limit headers and skip providers that are expected to be exhausted,
+      instead of calling them to find out. *(OpenSpec `roadmap-leftovers`: a successful reply that reports no requests, or under 1,000 tokens, left starts a skip until the reported reset. Seen live, only Groq sends these headers on success.)*
 - **Don't swap in LiteLLM.** The existing chain works and is tested; port the ideas.
 
 ---
@@ -328,8 +336,8 @@ capability as a folder containing a `SKILL.md` with a small metadata header:
       entries, the `tier_gate.py` table, the dispatch, and the help text.
 - [ ] Skip a capability at load time when its requirements are missing. That replaces
       today's scattered `available()` probes. *Deferred: skipping a route would push its requests into other intents, and a wrong declaration would hide a working capability. If done, answer "X is unavailable because Y" instead of skipping, and measure against the golden set.*
-- [ ] Only name + description go into any LLM prompt, within a fixed budget. OpenClaw
-      spends about 24 tokens per skill and drops descriptions first when over budget.
+- [x] Only name + description go into any LLM prompt, within a fixed budget. OpenClaw
+      spends about 24 tokens per skill and drops descriptions first when over budget. *(Loading refuses a description over 700 characters or a list over 8,000; today 18 capabilities use 6,054. Descriptions are not dropped when over budget: startup stops, so the cut is reviewed.)*
 - [ ] The `input schema` field also feeds F2's structured-output adapter.
 - Effort: 3–5 days to migrate everything. **Do not copy OpenClaw's public skill
   registry.** It had 1,184+ malicious skills. Capabilities stay local, reviewed code.
@@ -361,9 +369,9 @@ it improves Zedek's own eval set.
 *Measured: median 64 ms for 20 candidates on CPU. On the labelled fixture: recall 15/15 vs 8/15 for the old gate, and 0/5 general-question leaks.
 Needed one addition beyond the plan: first-person queries are rewritten to third person before scoring, because without it no single threshold met the spec.*
 
-- [ ] Retrieve 15–20 candidates instead of 3, rerank with a small cross-encoder
+- [x] Retrieve 15–20 candidates instead of 3, rerank with a small cross-encoder
       (FlashRank `ms-marco-MiniLM-L-12-v2`, ~4 MB, or `bge-reranker-base`), keep the top 3.
-- [ ] Replace the L2 ≤ 1.0 cutoff with a **reranker-score threshold** tuned on the eval set.
+- [x] Replace the L2 ≤ 1.0 cutoff with a **reranker-score threshold** tuned on the eval set.
 - Evidence: an independent Jan-2026 CPU benchmark measured **+31 ms mean, ~0.3% of
   end-to-end time**. Anthropic (vendor) reports reranking on top of hybrid search cut top-20
   retrieval failures by 67%. A Sept-2026 academic study used bge-reranker-base as its

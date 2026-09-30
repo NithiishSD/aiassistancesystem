@@ -257,9 +257,21 @@ def test_regression_existing_functions_work_without_mcp(tmp_path, monkeypatch):
 
 # ── Integration Tests: Real STDIO subprocess with mcp_demo_server ──────────────
 
+def _discover_bundled_tools():
+    """Real discovery, once more if the bundled server did not answer in time.
+
+    Every configured server is started as a subprocess under its own timeout;
+    on a busy machine the bundled one occasionally misses it, which failed
+    these tests at random during full-suite runs."""
+    tools = mcp_client.discover_all_tools()
+    if not any(t.qualified_name == "mcp_zedek_tools_current_time" for t in tools):
+        tools = mcp_client.discover_all_tools()
+    return tools
+
+
 def test_integration_mcp_discovery_and_stats():
     """Discover tools from bundled mcp_demo_server over real STDIO."""
-    tools = mcp_client.discover_all_tools()
+    tools = _discover_bundled_tools()
     assert len(tools) >= 3
 
     qnames = [t.qualified_name for t in tools]
@@ -275,7 +287,7 @@ def test_integration_mcp_discovery_and_stats():
 
 def test_integration_call_current_time():
     """Invoke current_time tool over real STDIO protocol."""
-    mcp_client.discover_all_tools()
+    _discover_bundled_tools()
     res = mcp_client.call_mcp_tool("mcp_zedek_tools_current_time", {})
     assert res["error"] is None
     assert res["result"] is not None
@@ -284,7 +296,7 @@ def test_integration_call_current_time():
 
 def test_integration_call_word_count():
     """Invoke word_count tool with arguments over real STDIO protocol."""
-    mcp_client.discover_all_tools()
+    _discover_bundled_tools()
     res = mcp_client.call_mcp_tool(
         "mcp_zedek_tools_word_count",
         {"text": "The quick brown fox jumps over the lazy dog"},
@@ -296,7 +308,7 @@ def test_integration_call_word_count():
 
 def test_integration_call_summarize_text():
     """Invoke summarize_text tool with arguments over real STDIO protocol."""
-    mcp_client.discover_all_tools()
+    _discover_bundled_tools()
     res = mcp_client.call_mcp_tool(
         "mcp_zedek_tools_summarize_text",
         {"text": "Zedek is an assistant. It helps with system inspection and coding."},
@@ -308,7 +320,7 @@ def test_integration_call_summarize_text():
 
 def test_integration_orchestrator_execute_mcp_tool():
     """Test full dispatch pipeline through orchestrator._execute_mcp_tool()."""
-    mcp_client.discover_all_tools()
+    _discover_bundled_tools()
     decision = {
         "function": "mcp_tool",
         "domain": "personal",
