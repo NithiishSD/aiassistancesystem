@@ -84,3 +84,17 @@ A provider response that carries no answer SHALL be treated as a failed request.
 #### Scenario: Rate limit reported in a successful response
 - **WHEN** a provider answers HTTP 200 with an error body whose code is 429
 - **THEN** the provider cools down as for an HTTP 429, and the chain moves on
+
+### Requirement: One configurable local model
+Every local-model call SHALL use a single model setting, overridable with `ZEDEK_LOCAL_MODEL`.
+
+#### Scenario: Rollback by setting
+- **WHEN** `ZEDEK_LOCAL_MODEL=llama3.1:8b` is set
+- **THEN** the provider chain's local fallback and the orchestrator's direct local calls all use `llama3.1:8b`
+
+### Requirement: Local calls never think
+Every local-model call SHALL request that the model not produce a reasoning trace.
+
+#### Scenario: Structured local call
+- **WHEN** the orchestrator extracts function arguments locally with JSON output
+- **THEN** the request disables thinking and the reply is parsed as JSON
