@@ -34,3 +34,8 @@ data/mcp_tool_lock.json
 
 # Misroutes the owner corrected (user utterances; promote into evals by hand)
 data/misroutes.jsonl
+
+# Scheduled jobs, their run state and the inbox of results (personal data)
+data/schedule.json
+data/schedule_state.json
+data/inbox.jsonl

@@ -1,0 +1,11 @@
+# Checks every 30 minutes whether a Zedek job is due; each job still runs at
+# most once a day. Persistent=true catches up after the machine was off.
+[Unit]
+Description=Check for due Zedek scheduled jobs
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

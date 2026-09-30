@@ -256,11 +256,13 @@ model, and the configured Cerebras and NVIDIA models return 404.
 
 ## Phase D — Making it feel like an assistant
 
-### D1. Proactivity — the biggest perceived-intelligence win
+### D1. Proactivity — the biggest perceived-intelligence win ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `proactive-digest` (main spec `openspec/specs/proactive-digest/`). `digest.py` builds the digest from the tracker and stored facts with no model call (stale topics, weak topics with reasons, streak, and commitment facts with how long ago they were noted); nothing to say means nothing delivered. `scheduler.py` runs jobs from `data/schedule.json` (default: digest daily at 08:00; a job can also be a stored prompt sent through `handle()`), once per day with catch-up, into `data/inbox.jsonl`. The REPL shows unread items at startup; `digest` and `inbox` are REPL commands. Scheduled prompts run under the deny-all confirmation channel: live, a scheduled browser prompt was refused at the gate. **Tier 1 (notify-only) actions do run unattended**, e.g. a scheduled "open the calculator" opens it. A `systemd --user` timer template is in `deploy/`; installing it is manual. No APScheduler: a timer plus a one-shot command needs no dependency.*
 Today Zedek only reacts. The academic tracker and memory already hold everything needed for:
 > "You haven't touched graphs in 12 days and you're at 40% there. Your DS exam is next
 > week — want three problems?"
-- [ ] Daily digest job surfacing stale topics, weak areas, and upcoming commitments.
+- [x] Daily digest job surfacing stale topics, weak areas, and upcoming commitments.
+- [ ] Follow-up: a routed intent so "what should I focus on today" works in plain language (needs golden-set rows).
 - Scheduled prompts are now standard across the field: Open WebUI Automations, LibreChat
   Scheduled Chats, Khoj automations, AnythingLLM Scheduled Jobs. Implement with
   APScheduler + SQLite (1–2 days). The digest itself is a stored prompt run on a cron,

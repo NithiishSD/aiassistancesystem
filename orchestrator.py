@@ -1773,15 +1773,53 @@ def _check_capability_handlers() -> None:
 _check_capability_handlers()
 
 
+def _unread_notices(run_jobs: bool = True) -> str:
+    """Scheduled-job results the user has not seen yet (ROADMAP D1), marked
+    read once returned. Runs any job that came due while Zedek was closed.
+    Never raises: a broken schedule must not stop the session from starting."""
+    import scheduler
+
+    try:
+        if run_jobs:
+            scheduler.run_due()
+        unread = scheduler.take_unread()
+    except Exception as error:
+        log.info("startup_notices_failed", extra={"error": str(error)[:200]})
+        return ""
+    if not unread:
+        return ""
+    return "📬 While you were away:\n\n" + scheduler.format_entries(unread)
+
+
+def _repl_command(user_input: str) -> str | None:
+    """REPL-only commands that are not routed requests. None if not one."""
+    command = user_input.lower()
+    if command in ("help", "/help", "?"):
+        return capabilities.help_text() + "\n\nAlso: 'digest' (today's digest), 'inbox' (scheduled-job results)."
+    if command == "digest":
+        import digest
+        return digest.build_digest() or "Nothing to report today."
+    if command == "inbox":
+        import scheduler
+        entries = scheduler.read_inbox()[-5:]
+        return scheduler.format_entries(entries) if entries else "Your inbox is empty."
+    return None
+
+
 if __name__ == "__main__":
     print("=== Zedek Orchestrator (Phase 6: tier gate + tiered memory active) — interactive test ===")
     print("Try things like: 'how much free space do I have', 'what's using the most memory', 'find my resume file'")
     print("Type 'help' to see what I can do, 'quit' to exit.\n")
 
+    notices = _unread_notices()
+    if notices:
+        print(notices + "\n")
+
     while True:
         user_input = input("You: ").strip()
-        if user_input.lower() in ("help", "/help", "?"):
-            print(capabilities.help_text() + "\n")
+        command_reply = _repl_command(user_input)
+        if command_reply is not None:
+            print(command_reply + "\n")
             continue
         if user_input.lower() in ("quit", "exit"):
             print("Ending session — reviewing what's worth remembering long-term...")

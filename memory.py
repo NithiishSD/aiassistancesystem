@@ -384,6 +384,17 @@ def invalidate(ids: list[str], domain: str = "personal", user_id: str = DEFAULT_
     return changed
 
 
+def current_facts(domain: str = "personal", user_id: str = DEFAULT_USER_ID) -> list[dict]:
+    """Every fact still valid in a domain, oldest first (no search, no ranking)."""
+    _validate_domain(domain)
+    _validate_user_id(user_id)
+    rows = _get_collection(domain).get(where=_where(user_id, "fact"))
+    items = [{"text": doc, "metadata": meta or {}, "id": item_id}
+             for doc, meta, item_id in zip(rows.get("documents") or [], rows.get("metadatas") or [],
+                                           rows.get("ids") or [])]
+    return sorted(items, key=lambda item: item["metadata"].get("timestamp") or 0)
+
+
 def history(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_ID,
             top_k: int = 10) -> list[dict]:
     """Facts matching `query` including those no longer valid, each with a

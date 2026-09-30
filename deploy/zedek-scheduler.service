@@ -1,0 +1,11 @@
+# Runs Zedek's due scheduled jobs once (ROADMAP D1). Started by zedek-scheduler.timer.
+# Install (as your user, not root). Replace /path/to/aiassistancesystem first:
+#   cp deploy/zedek-scheduler.* ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now zedek-scheduler.timer
+[Unit]
+Description=Zedek scheduled jobs (daily digest)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/aiassistancesystem
+ExecStart=/path/to/aiassistancesystem/zedek-env/bin/python scheduler.py --run-due
