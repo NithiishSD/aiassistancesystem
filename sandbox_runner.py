@@ -22,6 +22,7 @@ Key capabilities:
 from __future__ import annotations
 
 import ast
+import contextlib
 import enum
 import fnmatch
 import os
@@ -34,6 +35,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import net_policy
+from sandbox_egress import EgressProxy
 from zedek_logger import get_logger
 
 log = get_logger("sandbox_runner")
@@ -91,6 +94,19 @@ _NO_ISOLATION_MESSAGE = (
     "code was not run. Install bubblewrap (apt install bubblewrap), or set "
     "ZEDEK_SANDBOX_ALLOW_UNISOLATED=1 to run without filesystem or network isolation."
 )
+
+
+_NO_NETWORK_ISOLATION_MESSAGE = (
+    "Sandbox network access needs bubblewrap: the egress allowlist is enforced by "
+    "network namespaces, so network-enabled runs are refused without it, even with "
+    "ZEDEK_SANDBOX_ALLOW_UNISOLATED=1."
+)
+_EGRESS_SHIM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_egress_shim.py")
+
+
+def _env_allowlist() -> list[str]:
+    """ZEDEK_SANDBOX_EGRESS_ALLOWLIST: comma-separated hosts or *.suffix entries."""
+    return [e for e in os.getenv("ZEDEK_SANDBOX_EGRESS_ALLOWLIST", "").split(",") if e.strip()]
 
 
 def _unisolated_allowed() -> bool:
@@ -220,8 +236,13 @@ class SandboxRunner:
         max_output_bytes: int = 32_768,
         max_memory_mb: int = 512,
         allow_unisolated: bool | None = None,
+        egress_allowlist: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
+        # Hosts network-enabled runs may reach through the egress proxy (B4).
+        # Invalid entries raise here, so a typo cannot silently widen access.
+        self.egress_allowlist = net_policy.parse_allowlist(
+            _env_allowlist() if egress_allowlist is None else egress_allowlist)
         self.max_output_bytes = max_output_bytes
         self.max_memory_mb = max_memory_mb
         self._has_bwrap = _is_bwrap_functional()
@@ -387,6 +408,12 @@ class SandboxRunner:
         if not self.allow_unisolated:
             log.info("sandbox_refused_unisolated", extra={"mode": mode.value})
             return ExecutionResult("unavailable", None, "", _NO_ISOLATION_MESSAGE, 0.0, "none")
+        if allow_network:
+            # The allowlist is enforced by giving the sandbox no network of its
+            # own; without namespaces it would be the open internet. Refused
+            # even with the unisolated opt-in.
+            log.info("sandbox_refused_unisolated_network", extra={"mode": mode.value})
+            return ExecutionResult("unavailable", None, "", _NO_NETWORK_ISOLATION_MESSAGE, 0.0, "none")
 
         log.info("sandbox_unisolated_run", extra={"mode": mode.value})
         res = self._execute_rlimit(cmd, work_dir, mode, project_root, allow_network, extra_env)
@@ -407,11 +434,9 @@ class SandboxRunner:
         if not bwrap:
             return ExecutionResult("unavailable", None, "", "bwrap not found", 0.0, "bubblewrap")
 
-        bwrap_cmd = [bwrap]
-        if allow_network:
-            bwrap_cmd += ["--unshare-pid", "--unshare-uts", "--unshare-ipc"]
-        else:
-            bwrap_cmd += ["--unshare-all"]
+        # Always a private, empty network namespace (loopback only). With
+        # allow_network, the only way out is the egress proxy bound in below.
+        bwrap_cmd = [bwrap, "--unshare-all"]
 
         # The child gets exactly the clean environment the rlimit path uses.
         clean_env = self._build_clean_env(extra_env, work_dir)
@@ -437,13 +462,26 @@ class SandboxRunner:
             secrets = _secret_files(project_root)
 
         max_processes = _process_limit()
-        # Secret files are masked with an empty regular file (later mounts win);
-        # /dev/null cannot be used, the tmpfs holding the project is nodev.
-        with tempfile.NamedTemporaryFile(prefix="zedek-mask-") as mask:
+        with contextlib.ExitStack() as stack:
+            # Secret files are masked with an empty regular file (later mounts win);
+            # /dev/null cannot be used, the tmpfs holding the project is nodev.
+            mask = stack.enter_context(tempfile.NamedTemporaryFile(prefix="zedek-mask-"))
             for secret in secrets:
                 bwrap_cmd += ["--ro-bind", mask.name, secret]
+            if allow_network:
+                proxy = stack.enter_context(self._egress_proxy_factory(self.egress_allowlist))
+                bwrap_cmd += [
+                    "--dir", "/zedek",
+                    "--ro-bind", _EGRESS_SHIM, "/zedek/egress_shim.py",
+                    "--bind", proxy.socket_path, "/zedek/egress.sock",
+                ]
+                cmd = [sys.executable, "/zedek/egress_shim.py", "/zedek/egress.sock", "--", *cmd]
+                log.info("sandbox_egress_enabled", extra={"allowlist": list(self.egress_allowlist)})
             bwrap_cmd += ["--chdir", work_dir, "--"] + cmd
             return self._run_bwrap(bwrap_cmd, max_processes)
+
+    # Replaceable in tests (fake DNS and upstreams); production uses EgressProxy.
+    _egress_proxy_factory = staticmethod(lambda allowlist: EgressProxy(allowlist))
 
     def _run_bwrap(self, bwrap_cmd: list[str], max_processes: int) -> ExecutionResult:
         try:

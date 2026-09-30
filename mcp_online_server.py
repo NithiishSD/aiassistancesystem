@@ -29,6 +29,8 @@ from urllib.parse import urljoin, quote, quote_plus, urlparse
 
 import httpx
 
+import net_policy
+
 from mcp.server.mcpserver import MCPServer
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -50,16 +52,7 @@ _ARXIV_ABSTRACT_MAX_CHARS = 600
 # Reject any URL whose resolved host is inside a private/loopback/link-local
 # range. This runs before any network I/O.
 
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),      # loopback
-    ipaddress.ip_network("10.0.0.0/8"),       # RFC-1918 private
-    ipaddress.ip_network("172.16.0.0/12"),    # RFC-1918 private
-    ipaddress.ip_network("192.168.0.0/16"),   # RFC-1918 private
-    ipaddress.ip_network("169.254.0.0/16"),   # link-local / AWS metadata
-    ipaddress.ip_network("::1/128"),          # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),         # IPv6 ULA (private)
-    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
-]
+# Address rules are shared with the sandbox egress proxy (net_policy.py).
 
 _BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
 
@@ -109,13 +102,7 @@ def _ssrf_check(url: str) -> str | None:
 
 
 def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Only globally routable unicast addresses may be fetched. The explicit list
-    above missed 0.0.0.0 (reaches localhost on Linux), 100.64.0.0/10 (CGNAT),
-    198.18.0.0/15 and IPv4-mapped IPv6 such as ::ffff:127.0.0.1."""
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        ip = mapped
-    return (not ip.is_global) or ip.is_multicast or any(ip in net for net in _BLOCKED_NETWORKS)
+    return net_policy.ip_blocked(ip)
 
 
 _MAX_REDIRECTS = 5

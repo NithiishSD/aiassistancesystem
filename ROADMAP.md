@@ -178,8 +178,9 @@ Tier 1. **That lane fails open.**
 - [x] Scrub provider keys from the sandbox child's environment (and its files).
 - [x] Fail closed (OpenSpec `sandbox-fail-closed`): without working bubblewrap, sandbox runs are refused with a message naming the fix; the unisolated rlimit fallback (no filesystem or network isolation) runs only with `ZEDEK_SANDBOX_ALLOW_UNISOLATED=1`, and each such run is logged. The coding agent reports refused runs as `unverified`.
 
-### B4. Egress allowlist for network-enabled sandbox runs
-- [ ] When `allow_network=True`, restrict to an FQDN allowlist rather than the open internet.
+### B4. Egress allowlist for network-enabled sandbox runs ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `sandbox-egress-allowlist`: the sandbox never has a network of its own; its only way out is a host-side proxy over a bound Unix socket that allows only allowlisted DNS names on 80/443, only at public addresses (connecting to the checked IP, which also closes DNS rebinding), and checks TLS SNI against the approved host. Live: HTTPS to an allowlisted pypi.org works with normal certificate checks; other hosts get 403; direct sockets have no route. Network runs are refused without bubblewrap.*
+- [x] When `allow_network=True`, restrict to an FQDN allowlist rather than the open internet. *Configure with `ZEDEK_SANDBOX_EGRESS_ALLOWLIST` (empty = nothing reachable).*
 
 ### B5. Neuter non-source URLs in research output ✅ DONE 2026-09-30
 *Shipped as OpenSpec change `research-link-policy`: only links the user typed or that appear in trusted sources (memory, Wikipedia, arXiv, Semantic Scholar) survive; links found only inside fetched pages, or invented by the model, become `[unverified link removed: host[.]tld]` with a note. Lookalike hosts and `user@host` tricks are caught; the raw-source fallback is covered too.*
