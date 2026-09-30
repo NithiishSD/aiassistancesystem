@@ -19,7 +19,6 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-logging.disable(logging.CRITICAL)
 
 import chromadb  # noqa: E402
 
@@ -89,6 +88,7 @@ def run(facts: dict[str, str], queries: list[dict], keyword_k: int) -> dict:
 
 
 def main() -> int:
+    logging.disable(logging.CRITICAL)  # here, not at import: tests import this module
     if reranker.score("warm up", ["a", "b"]) is None:
         print("Reranker model not installed — run setup.sh step 7.")
         return 2

@@ -84,3 +84,23 @@ def test_the_1_06_case_is_found(fixture_results):
             assert ids and ids[0] == "f02"
             return
     pytest.fail("fixture is missing the 'what college do I study at' query")
+
+
+def test_paraphrases_are_well_formed():
+    """The harder rewordings scored by evals/retrieval_eval.py (ROADMAP F7)."""
+    import sys
+
+    with open(FIXTURE, encoding="utf-8") as handle:
+        data = json.load(handle)
+    known = {q["q"] for q in data["queries"]}
+    assert len(data["paraphrases"]) >= 20
+    for query in data["paraphrases"]:
+        assert query["q"] not in known
+        assert all(fact_id in data["facts"] for fact_id in query["relevant"]), query
+        assert len(query["relevant"]) <= 3
+
+    sys.path.insert(0, os.path.dirname(FIXTURE))
+    import retrieval_eval
+
+    assert retrieval_eval.parse_model("bge=/m/bge::Represent this: ") == ("bge", "/m/bge", "Represent this: ")
+    assert retrieval_eval.parse_model("mini=/m/mini") == ("mini", "/m/mini", "")

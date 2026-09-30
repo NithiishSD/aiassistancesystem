@@ -118,8 +118,10 @@ collapses as tool count grows.
 - [ ] **"Must stay local" list.** Utterances the classifier must never send to the LLM
       fallback. Home Assistant shipped a regression (issue #139415) that sent every
       command to the LLM. A test list like this would have caught it.
-- [ ] **Retrieval eval set: 30–50 real queries with the facts or sources they should
-      retrieve.** This is step 0 for all of Phase F. Nobody has published a benchmark on
+- [x] **Retrieval eval set: 30–50 real queries with the facts or sources they should
+      retrieve.** *Done: `evals/retrieval_fixture.json` holds 50 questions (29 + 21 harder rewordings, fictional values),
+      scored by `evals/retrieval_eval.py`. At the current gate: recall 36/43, one leak in 8 general questions. The misses
+      are rewordings ("what do people call me"), which neither a different embedding nor a larger reranker fixed.* This is step 0 for all of Phase F. Nobody has published a benchmark on
       a single user's few hundred short facts, so the reranker threshold, the embedding
       choice, and whether an NLI check pays off all have to be measured here.
 - **No platform.** pytest + sklearn, both already present. DeepEval later *if* it hurts.
@@ -422,13 +424,15 @@ that is lost.
   go straight into the prompt, and Zedek's facts are far below that. 1–2 days. *Benefit
   over pure RAG is unmeasured, so check it on the eval set.*
 
-### F7. Embedding model upgrade (decide with the eval set)
-- [ ] Memory: `snowflake-arctic-embed-s` (51.98 MTEB retrieval nDCG@10) or
+### F7. Embedding model upgrade (decide with the eval set) ✅ DECIDED 2026-09-30: no change
+*Measured in OpenSpec change `retrieval-eval-model-decision` with `evals/retrieval_eval.py` on 50 questions (21 new harder rewordings) at 37 / 187 / 412 facts. Labelled facts reaching the candidate pool at 187 / 412 facts: **MiniLM-L6 36/43 and 36/43; bge-small-en-v1.5 34/43 and 35/43; snowflake-arctic-embed-s 7/43 and 3/43** (on short "User's X: Y" facts it barely separates the right fact from the rest). Neither candidate beats what is installed, so there is no re-embed.*
+- [x] Memory: `snowflake-arctic-embed-s` (51.98 MTEB retrieval nDCG@10) or
       `bge-small-en-v1.5` (51.68). Both are 384-dim like MiniLM, so storage size doesn't
       change. Requires a re-embed and a query prefix. Scores are self-reported on model cards.
 - [ ] Router: `model2vec` `potion-base-8M` is up to 500× faster on CPU at ~92% of MiniLM's
       MTEB average. It's a candidate for `classifier.py` only, never for memory. Accept it
-      only if routing accuracy holds in A4.
+      only if routing accuracy holds in A4. *Not pursued: Layer 1 already takes about 5 ms per request, so there is
+      nothing to win and routing accuracy to lose.*
 
 ### F8. Condenser + stuck detection
 - [ ] At ~70% of the smallest provider's context window, summarize the middle of the
@@ -518,6 +522,9 @@ Recording these so they don't get relitigated:
   locally, so Outlines adds nothing.
 - **Large rerankers first (bge-reranker-v2-m3, mxbai-v2).** Only GPU latency is
   published. Start small (F1) and move up only if the eval set shows a gap.
+  *Measured 2026-09-30 (`evals/retrieval_eval.py --reranker`), recall of 43 labelled facts at a zero-leak threshold,
+  at 37 / 187 / 412 facts: installed ms-marco-MiniLM-L-6 35 / 35 / 35; ms-marco-MiniLM-L-12 35 / 33 / 34;
+  bge-reranker-base 34 / 33 / 30 at 5× the time and 1.1 GB. A larger reranker does not close the rewording gap.*
 - **OpenClaw's skill registry, network gateway, and messaging bridges.** 1,184+ malicious
   skills found on its registry; CVE-2026-25253 gave remote code execution through its
   localhost WebSocket gateway, which had no Origin check. When Chainlit (D4) opens a port,
