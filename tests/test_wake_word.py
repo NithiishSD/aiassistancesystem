@@ -5,8 +5,9 @@ The important properties:
 - Ordinary room conversation is ignored; only the wake word activates.
 - The activation window opens, refreshes, expires, and can be closed by voice.
 - STT mangling of the wake word still activates (variant matching).
-- The default handler is Q&A-only — there is NO path from a spoken utterance
-  to orchestrator.execute(), so voice cannot trigger a system action.
+- A spoken question is Q&A-only — there is NO path from it to
+  orchestrator.execute(). The few read-only spoken commands (ROADMAP F9) are
+  covered in test_voice_commands.py.
 """
 
 import time

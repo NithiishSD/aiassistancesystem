@@ -75,7 +75,7 @@ before it's adopted.
 | Router embeddings (candidate) | `model2vec` `potion-base-8M` | Up to 500× faster on CPU. Router only, never memory. Accepted only if routing accuracy holds. |
 | Core memory | Always-in-prompt `user_profile` block as git-tracked markdown | Letta/OpenClaw pattern: no retrieval miss on the most-used facts, and every learned change is diffable. |
 | Scheduling | APScheduler + SQLite | For the proactive digest. Scheduled prompts are now standard across Open WebUI, LibreChat, Khoj, and AnythingLLM. |
-| Voice latency | Sentence-split streaming into TTS; grammar-limited Vosk recognizer for commands | Home Assistant measured 5–6 s → ~0.5 s time-to-speech, and ~150 ms command recognition. |
+| Voice latency | Sentence-split streaming into TTS; grammar-limited Vosk recognizer for commands | Home Assistant measured 5–6 s → ~0.5 s time-to-speech, and ~150 ms command recognition. Here: the grammar recognizer adds ~50 ms per utterance and hears the wake word in 173 of 184 synthesized utterances, against 13 for the free-form recognizer alone (`evals/voice_grammar_eval.py`). |
 | Citation check (maybe) | MiniCheck ~0.4B NLI model, local | Catches "post-rationalized" citations with no LLM call. CPU latency is unpublished, so benchmark it first. |
 
 Full evidence and rejected alternatives: [`reports/Open source assistant improvements.md`](reports/Open%20source%20assistant%20improvements.md).

@@ -56,6 +56,9 @@ ACADEMIC_TRACKER = AcademicTracker()
 # Where the current turn's general answer streams to (ROADMAP D2). Set by
 # handle(); None means the answer is only returned.
 _REPLY_STREAM: ContextVar["llm_provider.StreamSink | None"] = ContextVar("_REPLY_STREAM", default=None)
+# Recent turns from a channel that does not write to SESSION_HISTORY (voice,
+# ROADMAP F9), so follow-up questions there have something to refer to.
+_CHANNEL_TURNS: ContextVar[tuple[dict, ...]] = ContextVar("_CHANNEL_TURNS", default=())
 
 
 # ── Static-first prompts (ROADMAP F5) ────────────────────────────────────────
@@ -973,6 +976,7 @@ do not merge them into one confused statement.
     # varies per turn, so provider prefix caches can hit (ROADMAP F5).
     messages = [{"role": "system", "content": _GENERAL_QA_SYSTEM}]
     messages.extend(SESSION_HISTORY)
+    messages.extend(_CHANNEL_TURNS.get())
     # Turns already dropped from the buffer survive as a short summary (F8).
     earlier_note = f"\nEarlier in this conversation (summary): {SESSION_SUMMARY}\n" if SESSION_SUMMARY else ""
     messages.append({"role": "user", "content": f"""Long-term facts relevant to this message:

@@ -448,8 +448,10 @@ that is lost.
 - [x] Watchdog flags repeated identical tool calls or error→retry cycles and stops to ask
       the user. Effort: 2–3 days.
 
-### F9. Two-tier voice recognition
-- [ ] A second Vosk recognizer restricted to a **grammar generated from the router's
+### F9. Two-tier voice recognition ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `two-tier-voice-recognition` (main spec `openspec/specs/voice-commands/`). `voice_commands.py` feeds the same audio to the free-form recognizer and to one limited to the wake word, the sleep phrases and 16 command phrases taken from the registry (`voice: true`, allowed only for Tier 0 native functions; today `free_space_summary` and `top_memory_processes`). A request is a command only when the limited recognizer heard one whole phrase with confidence; it then runs with default arguments, no router and no model call, through `execute()` and the tier gate with confirmations refused. Everything else stays a question. **Measured on synthesized speech, four voices (`evals/voice_grammar_eval.py`): wake word heard 9/64 → 64/64 on commands and 4/120 → 109/120 on questions; right command 3/64 → 64/64; 0/120 questions run as a command; 1/160 room sentences woke it (0 before, when it also rarely heard the real wake word); +49 ms per utterance.** The free-form recognizer writes the wake word as "she addict", "zodiac" or "derek", so the limited recognizer now supplies it. The last two spoken exchanges are passed to question answering for follow-ups and never stored. The activation window now runs from the reply. Left out: `disk_usage_by_folder` (56 s, longer than the window). **Not yet heard with a human voice**: run `python wake_word.py` and the eval's numbers should be read as a comparison, not field accuracy. This relaxes "voice never reaches `execute()`" for those two read-only functions only.*
+- [ ] Follow-up: try it with the owner's voice at the laptop microphone; tune `WORD_CONFIDENCE` and `WAKE_DECOYS` from what is misheard.
+- [x] A second Vosk recognizer restricted to a **grammar generated from the router's
       utterances** for commands (HA's Speech-to-Phrase: ~150 ms), keeping the free-form
       recognizer for Q&A. Pass recently handled local turns to the LLM so follow-ups work.
       Effort: 1.5–2.5 days. HA itself says the closed-vocabulary approach is "not for LLMs"

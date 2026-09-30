@@ -5,6 +5,7 @@ description: >-
   User wants to know how much free disk space remains overall, or a summary of used vs. available storage.
   Examples: 'how much space do I have left', 'is my drive full', 'show free disk capacity'.
 tier: 0
+voice: true
 utterances:
 - >-
   Check and summarize total, used, and available remaining free disk storage space and drive capacity.

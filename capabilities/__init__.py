@@ -3,8 +3,8 @@
 Each ``<name>.yaml`` in this folder holds a capability's name, a one-line
 user-facing summary, its handler (a function in orchestrator.py taking
 ``(decision, domain)``), its description (the only text an LLM sees about it),
-its router utterances, and optionally its route threshold, tier, argument types
-and ``runs_when_unsure``. ``index.yaml`` lists which exist and in
+its router utterances, and optionally its route threshold, tier, argument types,
+``runs_when_unsure`` and ``voice`` (may be run from a spoken request). ``index.yaml`` lists which exist and in
 what order. The classifier routes, the Layer-2 tool list, the tier table, the argument
 coercion, the dispatch in orchestrator.execute() and the REPL help are all
 derived from here, so they cannot drift apart.
@@ -26,8 +26,9 @@ import yaml
 DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_INTENT = "general_question"
 _ALLOWED_KEYS = {"name", "summary", "handler", "description", "threshold", "tier", "arg_types",
-                 "utterances", "short_examples", "runs_when_unsure"}
+                 "utterances", "short_examples", "runs_when_unsure", "voice"}
 _ARG_TYPES = {"int"}
+VOICE_HANDLER = "_run_native_function"
 
 
 class CapabilityError(ValueError):
@@ -46,6 +47,7 @@ class Capability:
     tier: int | None = None  # None: gated inside its handler, never by intent name
     arg_types: Mapping[str, str] = field(default_factory=dict)
     runs_when_unsure: bool = False  # dispatched even on a low-confidence route
+    voice: bool = False  # may be run from a spoken request (ROADMAP F9)
 
 
 def _string_list(value: Any, where: str, allow_empty: bool) -> tuple[str, ...]:
@@ -74,6 +76,13 @@ def _parse(name: str, doc: Any) -> Capability:
     runs_when_unsure = doc.get("runs_when_unsure", False)
     if not isinstance(runs_when_unsure, bool):
         raise CapabilityError(f"{where}: runs_when_unsure must be true or false")
+    voice = doc.get("voice", False)
+    if not isinstance(voice, bool):
+        raise CapabilityError(f"{where}: voice must be true or false")
+    # Speech is misheard and anyone in the room can speak, so only a Tier 0
+    # system_agent function, which the tier gate covers, may be voice-enabled.
+    if voice and (doc.get("tier") != 0 or handler != VOICE_HANDLER):
+        raise CapabilityError(f"{where}: voice requires tier 0 and handler {VOICE_HANDLER!r}")
     description = doc.get("description")
     if not isinstance(description, str) or not description.strip():
         raise CapabilityError(f"{where}: description is required")
@@ -103,6 +112,7 @@ def _parse(name: str, doc: Any) -> Capability:
         tier=tier,
         arg_types=MappingProxyType(dict(arg_types)),
         runs_when_unsure=runs_when_unsure,
+        voice=voice,
     )
 
 
@@ -165,6 +175,11 @@ def function_tiers() -> dict[str, int]:
 
 def int_args() -> dict[str, list[str]]:
     return {n: [a for a, t in c.arg_types.items() if t == "int"] for n, c in CAPABILITIES.items() if c.arg_types}
+
+
+def voice_capabilities() -> list[str]:
+    """Capabilities a spoken request may run, in route order."""
+    return [n for n in ROUTE_ORDER if CAPABILITIES[n].voice]
 
 
 def help_text() -> str:
