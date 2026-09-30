@@ -394,6 +394,24 @@ def is_term_already_specified(text: str, term: str) -> bool:
     return any(signal in text_lower for signal in context_signals)
 
 
+# Words that carry no topic of their own: question and request scaffolding.
+_TOPIC_FILLER = frozenset("""
+    what whats what's is are was a an the about tell me explain define describe
+    info information on of i i'm want to know more please pls can could you give
+    some do does mean means meaning who it this that hey hi hello bro yo so
+    actually just quick question again
+""".split())
+
+
+def _is_bare_topic(text: str, term: str) -> bool:
+    """True when the ambiguous term is the only thing the message is about
+    ("tell me about python"). Any other content word ("write a python
+    function", "is docker installed") already says which meaning is meant."""
+    words = re.findall(r"[a-z0-9+#.'-]+", text.lower())
+    content = [w.strip(".'-") for w in words]
+    return not [w for w in content if w and w != term and w not in _TOPIC_FILLER]
+
+
 def should_ask_ambiguous_term_question(user_input: str, recent_user_turns: list[str] | None = None) -> bool:
     """Only ask for clarification if a bare, under-specified ambiguous term is used."""
     text = user_input or ""
@@ -402,9 +420,12 @@ def should_ask_ambiguous_term_question(user_input: str, recent_user_turns: list[
     if not term:
         return False
 
+    if not _is_bare_topic(text, term):
+        return False
+
     # If the prompt is a correction, statement, or highly detailed, do NOT block it with ambiguity questions
     correction_signals = ["no", "incorrect", "wrong", "mistake", "mistook", "remove", "delete", "not part of", "correct", "not true", "false"]
-    if any(sig in text.lower() for sig in correction_signals):
+    if any(re.search(rf"\b{re.escape(sig)}\b", text.lower()) for sig in correction_signals):
         return False
 
     # If already specified by context in current turn
