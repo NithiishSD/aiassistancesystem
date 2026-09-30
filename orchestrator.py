@@ -18,7 +18,6 @@ import os
 import re
 import sys
 from contextvars import ContextVar
-import ollama
 from text_sanitizer import model_facing_description
 from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
@@ -41,7 +40,7 @@ from watchdog import Watchdog
 
 log = get_logger("orchestrator")
 
-ROUTING_MODEL = "llama3.1:8b"
+ROUTING_MODEL = llm_provider.LOCAL_MODEL  # one local-model setting (ROADMAP D3)
 CODING_SPECIALIST = CodingSpecialist()
 RESEARCH_AGENT = ResearchAgent()
 WEB_AGENT = WebAgent()
@@ -335,7 +334,7 @@ Transcript:
 {transcript}"""
 
     try:
-        response = ollama.chat(model=ROUTING_MODEL, messages=[{"role": "user", "content": prompt}])
+        response = llm_provider.local_chat([{"role": "user", "content": prompt}])
         extracted = response["message"]["content"].strip()
 
         if extracted.upper() == "NONE" or not extracted:
@@ -574,11 +573,7 @@ are mentioned, respond with {{}}.
 
 Request: {user_input}"""
 
-    response = ollama.chat(
-        model=ROUTING_MODEL,
-        messages=[{"role": "user", "content": arg_prompt}],
-        format="json",
-    )
+    response = llm_provider.local_chat([{"role": "user", "content": arg_prompt}], format="json")
     try:
         return json.loads(response["message"]["content"])
     except json.JSONDecodeError:
@@ -690,11 +685,7 @@ Respond ONLY with a JSON object of argument names to values. If no arguments are
         # Constrain decoding to the tool's own input schema (ROADMAP F2);
         # _validate_mcp_args still checks the result before any call.
         output_format = schema if schema.get("type") == "object" and properties else "json"
-        response = ollama.chat(
-            model=ROUTING_MODEL,
-            messages=[{"role": "user", "content": arg_prompt}],
-            format=output_format,
-        )
+        response = llm_provider.local_chat([{"role": "user", "content": arg_prompt}], format=output_format)
         parsed = json.loads(response["message"]["content"])
         if isinstance(parsed, dict):
             return {"qualified_name": tool_spec.qualified_name, "tool_args": parsed}

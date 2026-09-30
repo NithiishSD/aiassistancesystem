@@ -430,7 +430,7 @@ class TestMcpArgs:
                   "required": ["city"]}
         chat = MagicMock(return_value={"message": {"content": '{"city": "Chennai", "days": 3}'}})
         with patch.object(orchestrator, "_select_mcp_tool", return_value=self._spec(schema)), \
-             patch.object(orchestrator.ollama, "chat", chat):
+             patch.object(orchestrator.llm_provider.ollama, "chat", chat):
             result = orchestrator._extract_mcp_args("weather in chennai for 3 days")
         assert chat.call_args.kwargs["format"] == schema
         assert result == {"qualified_name": "mcp_s_weather", "tool_args": {"city": "Chennai", "days": 3}}

@@ -1,5 +1,5 @@
 # --- Local model runner client ---
-ollama==0.3.3
+ollama==0.6.3
 
 # --- Cloud model clients (free tiers) ---
 google-generativeai==0.8.3

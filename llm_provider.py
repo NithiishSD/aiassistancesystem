@@ -27,7 +27,8 @@ from zedek_logger import get_logger
 load_dotenv()
 
 log = get_logger("llm_provider")
-LOCAL_MODEL = "llama3.1:8b"
+# Every local call uses this one model (ROADMAP D3); ZEDEK_LOCAL_MODEL rolls it back.
+LOCAL_MODEL = os.getenv("ZEDEK_LOCAL_MODEL", "qwen3:8b")
 REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "12"))
 MODEL_CACHE_TTL = 3600  # re-check live catalogs at most once an hour
 
@@ -814,10 +815,17 @@ def _field(obj: Any, key: str) -> Any:
         return getattr(obj, key, None)
 
 
+def local_chat(messages: list[dict[str, str]], **kwargs: Any) -> Any:
+    """ollama.chat on LOCAL_MODEL with thinking off: a reasoning trace costs tens
+    of seconds on a laptop CPU and can break JSON output. kwargs pass through
+    (format, stream, options)."""
+    return ollama.chat(model=LOCAL_MODEL, messages=messages, think=False, **kwargs)
+
+
 def _local_stream(messages: list[dict[str, str]], on_delta: Callable[[str], None]) -> ProviderReply:
     parts: list[str] = []
     last: Any = None
-    for chunk in ollama.chat(model=LOCAL_MODEL, messages=messages, stream=True):
+    for chunk in local_chat(messages, stream=True):
         last = chunk
         message = _field(chunk, "message")
         content = _field(message, "content") if message is not None else None
@@ -845,13 +853,13 @@ def _local(messages: list[dict[str, str]], json_mode: bool,
     response = None
     if schema is not None and ("local", LOCAL_MODEL) not in _SCHEMA_UNSUPPORTED:
         try:
-            response = ollama.chat(model=LOCAL_MODEL, messages=messages, format=schema)
+            response = local_chat(messages, format=schema)
         except ollama.ResponseError:
             _mark_schema_unsupported("local", LOCAL_MODEL)
     if response is None:
         if schema is not None:
             messages = _schema_hint(messages, schema)
-        response = ollama.chat(model=LOCAL_MODEL, messages=messages, **options)
+        response = local_chat(messages, **options)
     reported = _field(response, "model")
     return ProviderReply(
         text=response["message"]["content"],

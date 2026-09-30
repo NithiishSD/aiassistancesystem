@@ -60,7 +60,7 @@ def test_session_flush_preserves_recent_turns(monkeypatch):
     orchestrator.SESSION_HISTORY = [
         {"role": "user", "content": f"msg {i}"} for i in range(12)
     ]
-    monkeypatch.setattr("orchestrator.ollama.chat", lambda **kwargs: {"message": {"content": "NONE"}})
+    monkeypatch.setattr("orchestrator.llm_provider.ollama.chat", lambda **kwargs: {"message": {"content": "NONE"}})
     orchestrator.summarize_and_flush_session(keep_recent=4)
     assert len(orchestrator.SESSION_HISTORY) == 4
     assert orchestrator.SESSION_HISTORY[-1]["content"] == "msg 11"

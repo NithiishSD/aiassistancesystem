@@ -272,8 +272,9 @@ no accuracy.
   only, and only once calls are non-blocking. With blocking `requests`, an abandoned call
   still burns quota.
 
-### D3. Local model refresh
-- [ ] `llama3.1:8b` → **Qwen3 8B**: same footprint, materially better instruction-following
+### D3. Local model refresh ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `local-model-qwen3`, gated on `evals/local_model_eval.py` (60 escalated DEV rows, cloud off, Layer-2 schema-constrained intent choice). **Intent accuracy 0.633 → 0.850**, structured validity 1.000 for both, median latency 1.52 s → 1.82 s (1.2×, within the 1.5× gate). Every local call goes through `llm_provider.local_chat` with `think=False` (a reasoning trace would cost tens of seconds on CPU); `ollama` client 0.3.3 → 0.6.3 for the `think` flag; one setting, `ZEDEK_LOCAL_MODEL`, now also drives the orchestrator's direct calls. Rollback: `ZEDEK_LOCAL_MODEL=llama3.1:8b`.*
+- [x] `llama3.1:8b` → **Qwen3 8B**: same footprint, materially better instruction-following
       and JSON reliability — which matters because the local fallback does structured
       extraction. Keep Ollama (llama.cpp is only 10–20% faster; vLLM targets 10–1000
       concurrent users). ~30 minutes, then re-run the evals from A4.
