@@ -122,3 +122,66 @@ def test_bwrap_child_gets_clean_env_and_extra_env(runner, monkeypatch):
     assert res.isolation_backend == "bubblewrap", res.stderr
     flag, home, leaked = res.stdout.split()
     assert flag == "on" and home.startswith("/tmp/zedek-sandbox-") and leaked == "False"
+
+
+# ── Fail closed without bubblewrap (OpenSpec change: sandbox-fail-closed) ────
+
+MARKER_CODE = "open('ran.txt', 'w').write('x')\nprint('RAN')"
+
+
+def _no_bwrap(monkeypatch, **kwargs):
+    monkeypatch.setattr(sr, "_is_bwrap_functional", lambda: False)
+    return SandboxRunner(timeout_seconds=10, **kwargs)
+
+
+def test_refuses_without_bubblewrap(monkeypatch):
+    monkeypatch.delenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", raising=False)
+    runner = _no_bwrap(monkeypatch)
+    monkeypatch.setattr(runner, "_execute_rlimit", lambda *a: pytest.fail("ran unisolated"))
+    res = runner.run_code(MARKER_CODE)
+    assert (res.status, res.isolation_backend) == ("unavailable", "none")
+    assert "apt install bubblewrap" in res.stderr and "ZEDEK_SANDBOX_ALLOW_UNISOLATED" in res.stderr
+
+
+def test_refuses_when_bubblewrap_fails_to_launch(runner, monkeypatch):
+    monkeypatch.delenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", raising=False)
+    runner._has_bwrap, runner.allow_unisolated = True, False
+    monkeypatch.setattr(runner, "_execute_bwrap",
+                        lambda *a: sr.ExecutionResult("unavailable", None, "", "boom", 0.0, "bubblewrap"))
+    assert runner.run_code(MARKER_CODE).status == "unavailable"
+
+
+@pytest.mark.parametrize("value,allowed", [("1", True), ("true", True), ("YES", True),
+                                           ("", False), ("0", False), ("no", False)])
+def test_opt_in_env(monkeypatch, value, allowed):
+    monkeypatch.setenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", value)
+    assert _no_bwrap(monkeypatch).allow_unisolated is allowed
+
+
+def test_opted_in_runs_unisolated_and_logs(monkeypatch):
+    monkeypatch.setenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", "1")
+    logged = []
+    monkeypatch.setattr(sr.log, "info", lambda msg, *a, **k: logged.append((msg, k.get("extra"))))
+    res = _no_bwrap(monkeypatch).run_code(MARKER_CODE)
+    assert (res.status, res.isolation_backend) == ("passed", "rlimit_process") and "RAN" in res.stdout
+    assert ("sandbox_backend", {"backend": "rlimit_process"}) in logged
+    assert any(msg == "sandbox_unisolated_run" for msg, _ in logged)
+
+
+def test_coding_runner_reports_unavailable(monkeypatch):
+    monkeypatch.delenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", raising=False)
+    monkeypatch.setattr(sr, "_is_bwrap_functional", lambda: False)
+    from coding_agent import SandboxedPythonRunner
+    assert SandboxedPythonRunner(timeout_seconds=5).run("print(1)")["status"] == "unavailable"
+
+
+def test_coding_agent_result_is_unverified_not_passed(monkeypatch):
+    monkeypatch.delenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", raising=False)
+    monkeypatch.setattr(sr, "_is_bwrap_functional", lambda: False)
+    from coding_agent import CodingSpecialist
+    agent = CodingSpecialist()
+    monkeypatch.setattr(agent, "patch", lambda *a, **k: {"code": "def f():\n    return 1\n"})
+    monkeypatch.setattr(agent, "generate_tests", lambda *a, **k: "assert True\n")
+    monkeypatch.setattr(agent._verifier, "review_with_llm", lambda *a, **k: {"approved": True})
+    result = agent.implement_and_verify("write f", plan={"goal": "f", "steps": ["write f"]})
+    assert result["status"] == "unverified"

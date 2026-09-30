@@ -86,6 +86,17 @@ def _mirror_ignore(_directory: str, names: list[str]) -> set[str]:
     return {n for n in names if n in _HEAVY_DIRS or is_secret_file(n)}
 
 
+_NO_ISOLATION_MESSAGE = (
+    "Sandbox unavailable: bubblewrap is missing or cannot create namespaces, so the "
+    "code was not run. Install bubblewrap (apt install bubblewrap), or set "
+    "ZEDEK_SANDBOX_ALLOW_UNISOLATED=1 to run without filesystem or network isolation."
+)
+
+
+def _unisolated_allowed() -> bool:
+    return os.getenv("ZEDEK_SANDBOX_ALLOW_UNISOLATED", "").strip().lower() in ("1", "true", "yes")
+
+
 class SandboxMode(str, enum.Enum):
     SNIPPET = "snippet"
     PROJECT_READ_ONLY = "project_read_only"
@@ -208,11 +219,17 @@ class SandboxRunner:
         timeout_seconds: int = 10,
         max_output_bytes: int = 32_768,
         max_memory_mb: int = 512,
+        allow_unisolated: bool | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_output_bytes = max_output_bytes
         self.max_memory_mb = max_memory_mb
         self._has_bwrap = _is_bwrap_functional()
+        # The rlimit fallback can read every file the user owns and has network
+        # access, so it runs only when explicitly allowed (fail closed).
+        self.allow_unisolated = _unisolated_allowed() if allow_unisolated is None else allow_unisolated
+        backend = "bubblewrap" if self._has_bwrap else ("rlimit_process" if self.allow_unisolated else "none")
+        log.info("sandbox_backend", extra={"backend": backend})
         log.info("sandbox_runner_init", extra={
             "bwrap_functional": self._has_bwrap,
             "timeout_seconds": self.timeout_seconds,
@@ -367,7 +384,11 @@ class SandboxRunner:
                 res.duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 return res
 
-        # Fallback to process isolation with setrlimit
+        if not self.allow_unisolated:
+            log.info("sandbox_refused_unisolated", extra={"mode": mode.value})
+            return ExecutionResult("unavailable", None, "", _NO_ISOLATION_MESSAGE, 0.0, "none")
+
+        log.info("sandbox_unisolated_run", extra={"mode": mode.value})
         res = self._execute_rlimit(cmd, work_dir, mode, project_root, allow_network, extra_env)
         res.duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
         return res
