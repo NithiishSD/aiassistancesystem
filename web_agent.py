@@ -696,6 +696,14 @@ Return ONLY valid JSON:
             if any(s.status == "denied" and s.tool == alias and s.args == args for s in steps):
                 notes.append("Stopped: the next proposed action was one you had already declined.")
                 break
+            # Going in circles (ROADMAP F8): the tools are stateless, so the same
+            # action on the same page returns the same thing. Stop instead of
+            # asking the user to confirm it again.
+            if any(s.status in ("ok", "error") and s.tool == alias and s.args == args for s in steps):
+                log.info("web_browse_stuck", extra={"tool": alias, "step": index})
+                notes.append(f"Stopped: I was about to repeat the same {alias} action, which would "
+                             "give the same result. Tell me what to try differently.")
+                break
             step = self.execute_action(
                 alias, args, goal, index, confirm,
                 provenance=provenance,

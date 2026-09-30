@@ -435,12 +435,13 @@ that is lost.
       only if routing accuracy holds in A4. *Not pursued: Layer 1 already takes about 5 ms per request, so there is
       nothing to win and routing accuracy to lose.*
 
-### F8. Condenser + stuck detection
-- [ ] At ~70% of the smallest provider's context window, summarize the middle of the
+### F8. Condenser + stuck detection ✅ DONE 2026-09-30 (scaled to Zedek)
+*Shipped as OpenSpec change `session-summary-and-loop-guard`. The buffer is 10 messages, so a "70% of the context window" trigger would never fire; instead the flush that already runs when it fills now also returns a short summary of the dropped turns (same local call; live: 12 s, four facts and a two-sentence summary), which general Q&A receives for the rest of the session. The flush also stopped reviewing the four kept turns twice, which stored their facts twice. Stuck detection: the browser run ends when the planner proposes an action identical to one that already ran. The coding agent makes at most two attempts, so there is nothing to cut short there.*
+- [x] At ~70% of the smallest provider's context window, summarize the middle of the
       session locally, keeping the start and recent tail. Before that, run OpenClaw's
       silent "save anything durable" turn. OpenHands (project-reported) halved per-turn cost
       with no loss in solve rate (54% vs 53%).
-- [ ] Watchdog flags repeated identical tool calls or error→retry cycles and stops to ask
+- [x] Watchdog flags repeated identical tool calls or error→retry cycles and stops to ask
       the user. Effort: 2–3 days.
 
 ### F9. Two-tier voice recognition

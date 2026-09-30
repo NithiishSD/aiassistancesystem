@@ -184,17 +184,50 @@ class TestBrowseLoop:
 
     def test_step_budget_is_enforced(self):
         agent = WebAgent(max_steps=2)
+        # Two different pages: repeating one identical action is stopped earlier
+        # by the going-in-circles guard (test_repeating_the_same_action_stops).
+        decisions = iter([{"tool": "navigate", "target": target, "selector": None, "text": None,
+                           "done": False, "reason": ""} for target in ("T1", "T2", "T1")])
+        steps = iter([Step(index=n, tool="navigate", args={"url": url}, status="ok", observation="loaded")
+                      for n, url in ((1, "https://example.com"), (2, "https://example.org"))])
+
+        with patch.object(WebAgent, "decide_next_action", side_effect=lambda *a, **k: next(decisions)), \
+             patch.object(WebAgent, "execute_action", side_effect=lambda *a, **k: next(steps)) as mock_exec, \
+             patch.object(WebAgent, "extract", return_value=None), \
+             patch.object(WebAgent, "summarize", return_value="done"):
+            report = agent.browse("keep going on example.com and example.org")
+
+        assert mock_exec.call_count == 2
+        assert any("limit" in n for n in report.notes)
+
+    def test_repeating_the_same_action_stops(self):
+        """Going in circles (ROADMAP F8): the same action again gives the same
+        result, so stop instead of asking for another confirmation."""
+        agent = WebAgent(max_steps=4)
         decision = {"tool": "navigate", "target": "T1", "selector": None, "text": None, "done": False, "reason": ""}
         ok_step = Step(index=1, tool="navigate", args={"url": "https://example.com"}, status="ok", observation="loaded")
 
-        with patch.object(WebAgent, "decide_next_action", return_value=decision), \
+        with patch.object(WebAgent, "decide_next_action", return_value=decision) as decide, \
              patch.object(WebAgent, "execute_action", return_value=ok_step) as mock_exec, \
              patch.object(WebAgent, "extract", return_value=None), \
              patch.object(WebAgent, "summarize", return_value="done"):
             report = agent.browse("keep going on example.com")
 
-        assert mock_exec.call_count == 2
-        assert any("limit" in n for n in report.notes)
+        assert mock_exec.call_count == 1 and decide.call_count == 2
+        assert any("repeat the same navigate action" in n for n in report.notes)
+        assert not any("limit" in n for n in report.notes)
+
+    def test_repeating_a_failed_action_stops(self):
+        agent = WebAgent(max_steps=4)
+        decision = {"tool": "navigate", "target": "T1", "selector": None, "text": None, "done": False, "reason": ""}
+        failed = Step(index=1, tool="navigate", args={"url": "https://example.com"}, status="error", reason="timeout")
+
+        with patch.object(WebAgent, "decide_next_action", return_value=decision), \
+             patch.object(WebAgent, "execute_action", return_value=failed) as mock_exec, \
+             patch.object(WebAgent, "summarize", return_value="done"):
+            report = agent.browse("open example.com")
+
+        assert mock_exec.call_count == 1 and report.completed is False
 
 
 class TestSummarize:

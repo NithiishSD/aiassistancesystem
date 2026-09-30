@@ -334,45 +334,69 @@ SESSION_HISTORY: list[dict] = []
 MAX_SESSION_TURNS = 10  # last 10 messages (~5 exchanges)
 
 
+SESSION_SUMMARY = ""  # what was said in turns already dropped from SESSION_HISTORY
+MAX_SESSION_SUMMARY_CHARS = 600
+
+
 def summarize_and_flush_session(domain: str = "personal", keep_recent: int = 0) -> None:
     """
-    Reviews the current session buffer, extracts only what's genuinely worth
-    remembering long-term (new facts, decisions, preferences), and stores
-    ONLY that distilled summary to ChromaDB — not the raw conversation.
-    Called when the session buffer fills up, or when the session ends.
-    
+    Reviews the turns about to leave the session buffer, extracts only what's
+    genuinely worth remembering long-term (new facts, decisions, preferences),
+    and stores ONLY that to ChromaDB — not the raw conversation. The same
+    call also returns a short summary of those turns, kept in SESSION_SUMMARY
+    so the conversation does not lose its thread when they are dropped
+    (ROADMAP F8). Called when the session buffer fills up, or when the
+    session ends.
+
     If keep_recent > 0, keeps the latest N turns in SESSION_HISTORY so
-    conversational continuity is not broken mid-session.
+    conversational continuity is not broken mid-session. Those turns are not
+    reviewed now: they will be when they are dropped, so nothing is stored twice.
+    With keep_recent == 0 the session is over and the summary is cleared.
     """
-    global SESSION_HISTORY
+    global SESSION_HISTORY, SESSION_SUMMARY
 
     if not SESSION_HISTORY:
         return
 
-    transcript = "\n".join(f"{turn['role']}: {turn['content']}" for turn in SESSION_HISTORY)
+    leaving = SESSION_HISTORY[:-keep_recent] if 0 < keep_recent < len(SESSION_HISTORY) else (
+        [] if keep_recent >= len(SESSION_HISTORY) else SESSION_HISTORY)
+    if not leaving:
+        return
 
-    prompt = f"""Below is a conversation transcript. Extract ONLY genuinely useful
-long-term facts worth remembering (new personal/academic facts, stated preferences,
-decisions) — ignore routine queries and their answers (e.g. disk space checks,
-one-off lookups) that have no lasting value.
+    transcript = "\n".join(f"{turn['role']}: {turn['content']}" for turn in leaving)
+    earlier = f"Summary of the conversation before this transcript: {SESSION_SUMMARY}\n\n" if SESSION_SUMMARY else ""
 
-Respond with each fact on its own line in the format "User's <attribute>: <value>".
-If nothing is worth remembering, respond with exactly: NONE
+    prompt = f"""Below is a conversation transcript. Do two things.
 
-Transcript:
+1. Extract ONLY genuinely useful long-term facts worth remembering (new personal/academic
+facts, stated preferences, decisions) — ignore routine queries and their answers (e.g. disk
+space checks, one-off lookups) that have no lasting value. Write each fact on its own line in
+the format "User's <attribute>: <value>". If nothing is worth remembering, write exactly: NONE
+
+2. On the last line, write "SUMMARY: " followed by one or two sentences saying what the
+conversation so far was about, so it can be continued later. Include the earlier summary's
+points that still matter. State only what was said.
+
+{earlier}Transcript:
 {transcript}"""
 
     try:
         response = llm_provider.local_chat([{"role": "user", "content": prompt}])
         extracted = response["message"]["content"].strip()
+        lines = [line.strip() for line in extracted.split("\n") if line.strip()]
 
-        if extracted.upper() == "NONE" or not extracted:
-            log.info("session_flush_nothing_worth_storing", extra={"turns_reviewed": len(SESSION_HISTORY)})
+        facts = [line for line in lines if line.startswith("User's")]
+        for fact in facts:
+            memory.store(fact, domain=domain, content_type="fact")
+        if facts:
+            log.info("session_flush_stored", extra={"facts_stored": len(facts), "turns_reviewed": len(leaving)})
         else:
-            facts = [line.strip() for line in extracted.split("\n") if line.strip() and line.strip().startswith("User's")]
-            for fact in facts:
-                memory.store(fact, domain=domain, content_type="fact")
-            log.info("session_flush_stored", extra={"facts_stored": len(facts), "turns_reviewed": len(SESSION_HISTORY)})
+            log.info("session_flush_nothing_worth_storing", extra={"turns_reviewed": len(leaving)})
+
+        summaries = [line[len("SUMMARY:"):].strip() for line in lines if line.upper().startswith("SUMMARY:")]
+        if keep_recent > 0 and summaries and summaries[-1]:
+            SESSION_SUMMARY = summaries[-1][:MAX_SESSION_SUMMARY_CHARS]
+            log.info("session_summary_updated", extra={"chars": len(SESSION_SUMMARY)})
     except Exception as err:
         log.info("session_flush_error", extra={"error": str(err)})
 
@@ -380,7 +404,7 @@ Transcript:
         SESSION_HISTORY = SESSION_HISTORY[-keep_recent:]
     elif keep_recent == 0:
         SESSION_HISTORY = []
-
+        SESSION_SUMMARY = ""
 
 def _add_to_session(role: str, content: str) -> None:
     SESSION_HISTORY.append({"role": role, "content": content})
@@ -949,9 +973,11 @@ do not merge them into one confused statement.
     # varies per turn, so provider prefix caches can hit (ROADMAP F5).
     messages = [{"role": "system", "content": _GENERAL_QA_SYSTEM}]
     messages.extend(SESSION_HISTORY)
+    # Turns already dropped from the buffer survive as a short summary (F8).
+    earlier_note = f"\nEarlier in this conversation (summary): {SESSION_SUMMARY}\n" if SESSION_SUMMARY else ""
     messages.append({"role": "user", "content": f"""Long-term facts relevant to this message:
 {long_term_block}
-{turn_structure_note}
+{earlier_note}{turn_structure_note}
 User's message: {user_input}"""})
 
     sink = _REPLY_STREAM.get()
