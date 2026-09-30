@@ -74,3 +74,10 @@ A clarifying question SHALL pre-empt routing only when an ambiguous term is the 
 #### Scenario: Bare topic
 - **WHEN** the user says "tell me about python"
 - **THEN** Zedek asks which meaning of "python" is meant
+
+### Requirement: The routing decision is typed
+The decision passed from routing to execution SHALL be a typed object carrying the user's input; an unknown field SHALL be an error, not a silent default.
+
+#### Scenario: Misspelled field
+- **WHEN** a caller passes a decision with the key `orignal_input`
+- **THEN** execution raises instead of running with an empty input
