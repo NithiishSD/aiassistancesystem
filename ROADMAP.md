@@ -195,7 +195,7 @@ workflow files**. The user saw nothing and the model read everything.
       untrusted text (web pages, fetched URLs, RAG sources, tool descriptions) before any
       LLM sees it. Goes in `web_agent.py`, `research_agent.py`, and the MCP registration path.
       *Done:* the web agent (B1), research sources, every MCP tool result, and MCP descriptions (B2).
-- [ ] OpenHands-style risk label: the LLM states LOW/MEDIUM/HIGH inside the tool call,
+- [x] OpenHands-style risk label: the LLM states LOW/MEDIUM/HIGH inside the tool call, *(Done in OpenSpec `llm-risk-label` for MCP calls, the one place a model's choice reaches the tier gate. Live: extraction 8/8 unchanged; public reads labelled LOW, a localhost fetch only MEDIUM, so labels are an extra signal, not a replacement for deterministic guards.)*
       at no extra inference cost. The effective tier is `max(rule tier, LLM risk)`, so the
       model can raise a tier but never lower it. That fits the tier gate's
       existing "lanes only raise" design.

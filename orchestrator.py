@@ -22,7 +22,7 @@ from contextvars import ContextVar
 from text_sanitizer import model_facing_description
 from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
-from tier_gate import gate
+from tier_gate import LLM_RISK_TIERS, gate
 import memory
 import capabilities
 import classifier
@@ -737,21 +737,32 @@ def _extract_mcp_args(user_input: str, target_tool_qname: str | None = None) -> 
         text_arg = _extract_target_text(user_input)
         return {"qualified_name": tool_spec.qualified_name, "tool_args": {"text": text_arg}}
 
-    # General schema-driven extraction via narrow Llama call
+    # General schema-driven extraction via a narrow local-model call. The same
+    # reply carries the model's risk label for the call (ROADMAP B6), which the
+    # tier gate may use to RAISE the tier, never lower it.
     arg_prompt = f"""Extract arguments for the tool "{tool_spec.tool_name}" with JSON schema:
 {json.dumps(schema, indent=2)}
 
 Request: {user_input}
 
-Respond ONLY with a JSON object of argument names to values. If no arguments are mentioned, respond with {{}}."""
+Respond ONLY with a JSON object: {{"args": <argument names to values, {{}} if none are mentioned>,
+"risk": "LOW" | "MEDIUM" | "HIGH"}}. risk is how risky THIS call is: LOW for reading public
+information, MEDIUM if it changes something reversible, HIGH if it could change or delete data,
+send something on the user's behalf, spend money, or reach private/internal addresses."""
     try:
         # Constrain decoding to the tool's own input schema (ROADMAP F2);
         # _validate_mcp_args still checks the result before any call.
-        output_format = schema if schema.get("type") == "object" and properties else "json"
+        args_schema = schema if schema.get("type") == "object" and properties else {"type": "object"}
+        output_format = {
+            "type": "object",
+            "properties": {"args": args_schema, "risk": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]}},
+            "required": ["args", "risk"],
+        }
         response = llm_provider.local_chat([{"role": "user", "content": arg_prompt}], format=output_format)
         parsed = json.loads(response["message"]["content"])
-        if isinstance(parsed, dict):
-            return {"qualified_name": tool_spec.qualified_name, "tool_args": parsed}
+        if isinstance(parsed, dict) and isinstance(parsed.get("args"), dict):
+            risk = parsed.get("risk") if parsed.get("risk") in LLM_RISK_TIERS else None
+            return {"qualified_name": tool_spec.qualified_name, "tool_args": parsed["args"], "risk": risk}
     except Exception:
         pass
 
@@ -1040,6 +1051,7 @@ def _execute_mcp_tool(decision: RoutingDecision) -> str:
     args_dict = decision.args
     qualified_name = args_dict.get("qualified_name", "")
     tool_args = args_dict.get("tool_args", {})
+    llm_risk = args_dict.get("risk")
     original_input = decision.user_input
 
     if not qualified_name:
@@ -1047,7 +1059,8 @@ def _execute_mcp_tool(decision: RoutingDecision) -> str:
         spec = _select_mcp_tool(original_input)
         if spec:
             qualified_name = spec.qualified_name
-            tool_args = _extract_mcp_args(original_input, target_tool_qname=qualified_name).get("tool_args", {})
+            extracted = _extract_mcp_args(original_input, target_tool_qname=qualified_name)
+            tool_args, llm_risk = extracted.get("tool_args", {}), extracted.get("risk")
 
     if not qualified_name:
         log.info("mcp_tool_execution_missing_target", extra={"user_input": original_input})
@@ -1065,7 +1078,7 @@ def _execute_mcp_tool(decision: RoutingDecision) -> str:
         return f"Invalid arguments for {tool_spec.tool_name}: {arg_error}"
 
     # Always pass through gate() — never bypassed
-    gate_decision = gate(qualified_name, tool_args, user_input=original_input,
+    gate_decision = gate(qualified_name, tool_args, user_input=original_input, llm_risk=llm_risk,
                          tool_description=tool_spec.description)
     if gate_decision["action"] == "blocked":
         return gate_decision["message"]

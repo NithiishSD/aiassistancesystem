@@ -428,9 +428,10 @@ class TestMcpArgs:
         import orchestrator
         schema = {"type": "object", "properties": {"city": {"type": "string"}, "days": {"type": "integer"}},
                   "required": ["city"]}
-        chat = MagicMock(return_value={"message": {"content": '{"city": "Chennai", "days": 3}'}})
+        chat = MagicMock(return_value={"message": {"content": '{"args": {"city": "Chennai", "days": 3}, "risk": "LOW"}'}})
         with patch.object(orchestrator, "_select_mcp_tool", return_value=self._spec(schema)), \
              patch.object(orchestrator.llm_provider.ollama, "chat", chat):
             result = orchestrator._extract_mcp_args("weather in chennai for 3 days")
-        assert chat.call_args.kwargs["format"] == schema
-        assert result == {"qualified_name": "mcp_s_weather", "tool_args": {"city": "Chennai", "days": 3}}
+        # The tool's own schema constrains the args; the B6 risk label rides in the same reply.
+        assert chat.call_args.kwargs["format"]["properties"]["args"] == schema
+        assert result == {"qualified_name": "mcp_s_weather", "tool_args": {"city": "Chennai", "days": 3}, "risk": "LOW"}

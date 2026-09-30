@@ -119,8 +119,15 @@ def _server_default_tier(func_name: str) -> int:
     return 1  # unknown server — return MCP default, pattern matching still applies
 
 
+# Lane 4: the model's own risk label (ROADMAP B6, OpenHands-style). The model
+# that chose the action states LOW/MEDIUM/HIGH in the same structured reply, at
+# no extra inference cost. It can only RAISE a tier: max(rule tier, label).
+# HIGH means "ask first", never "block": blocking stays a rule decision.
+LLM_RISK_TIERS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+
 def classify(func_name: str, args: dict, user_input: str = "",
-             tool_description: str = "") -> int:
+             tool_description: str = "", llm_risk: str | None = None) -> int:
     """Returns the tier (0-3) for a proposed action.
 
     Checks in order:
@@ -174,11 +181,15 @@ def classify(func_name: str, args: dict, user_input: str = "",
             log.info("tier_forced_2", extra={"function": func_name, "pattern": pattern})
             base_tier = max(base_tier, 2)
 
-    return base_tier
+    risk_tier = LLM_RISK_TIERS.get(llm_risk, 0) if isinstance(llm_risk, str) else 0
+    if risk_tier > base_tier:
+        log.info("tier_raised_by_llm_risk", extra={"function": func_name, "risk": llm_risk,
+                                                    "from": base_tier, "to": risk_tier})
+    return max(base_tier, risk_tier)
 
 
 def gate(func_name: str, args: dict, user_input: str = "",
-         tool_description: str = "") -> dict:
+         tool_description: str = "", llm_risk: str | None = None) -> dict:
     """
     Runs classification and returns a decision object telling the caller
     (orchestrator) how to proceed:
@@ -189,8 +200,11 @@ def gate(func_name: str, args: dict, user_input: str = "",
     string, enabling effect-verb matching against the tool's declared behaviour.
     Callers that do not supply it (e.g. legacy call sites) continue to work —
     only args/user-input patterns are checked in that case.
+
+    `llm_risk` ("LOW" | "MEDIUM" | "HIGH") is the choosing model's own label; it
+    can raise the tier (HIGH -> confirm) but never lower it.
     """
-    tier = classify(func_name, args, user_input, tool_description)
+    tier = classify(func_name, args, user_input, tool_description, llm_risk)
     log.info("gate_decision", extra={"function": func_name, "tier": tier})
 
     if tier == 0:
