@@ -53,6 +53,10 @@ jsonschema>=4.0.0
 # --- HTTP client used by the MCP servers (online/github/weather/scholar) ---
 httpx==0.27.2
 
+# --- Local browser UI (web_ui.py). Both also arrive as dependencies of `mcp`. ---
+fastapi==0.141.1
+uvicorn==0.52.4
+
 # --- Browser automation (web agent, mcp_playwright_server) ---
 # After install, also run: playwright install chromium
 playwright==1.62.0

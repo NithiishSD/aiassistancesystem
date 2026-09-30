@@ -1,0 +1,19 @@
+# Zedek's browser UI as a user service (ROADMAP D4): survives the terminal,
+# restarts on failure, starts at login. It listens on 127.0.0.1 only.
+# Install (as your user, not root). Replace /path/to/aiassistancesystem first:
+#   cp deploy/zedek-ui.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now zedek-ui
+# The address, with its access token, is written to $XDG_RUNTIME_DIR/zedek-ui.url
+# (and shown by: journalctl --user -u zedek-ui -n 5). It changes on every start.
+[Unit]
+Description=Zedek assistant (browser UI on 127.0.0.1)
+After=default.target
+
+[Service]
+WorkingDirectory=/path/to/aiassistancesystem
+ExecStart=/path/to/aiassistancesystem/zedek-env/bin/python web_ui.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

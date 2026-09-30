@@ -296,9 +296,10 @@ no accuracy.
       extraction. Keep Ollama (llama.cpp is only 10–20% faster; vLLM targets 10–1000
       concurrent users). ~30 minutes, then re-run the evals from A4.
 
-### D4. Packaging
-- [ ] `systemd --user` unit with `Restart=on-failure` so it survives the shell and starts on boot.
-- [ ] **Chainlit** for a UI — a framework driven from your own Python, which fits because
+### D4. Packaging ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `local-web-ui` (main spec `openspec/specs/web-ui/`). `python web_ui.py` serves one page on 127.0.0.1: messages go through `handle()`, answers stream in, and approvals are asked in the page (Approve / Decline with an optional reason) through a `WebChannel`. Every API call needs a per-start token carried in the URL fragment; a foreign `Host` (DNS rebinding) or cross-site `Origin` is refused; text is inserted with `textContent` only. Checked live in headless Chromium on scratch data: a question answered in the page, a browser task showing its Tier 2 confirmation, declining recorded with its reason. `deploy/zedek-ui.service` is the `systemd --user` unit (`Restart=on-failure`); installing it is manual. **Built on the already-installed FastAPI and uvicorn instead of Chainlit**, which would add a large dependency tree for one screen.*
+- [x] `systemd --user` unit with `Restart=on-failure` so it survives the shell and starts on boot.
+- [x] **Chainlit** for a UI — a framework driven from your own Python, which fits because
       the orchestrator is the product. (Open WebUI is a finished app wrapped around a
       model; wrong shape here.)
 
