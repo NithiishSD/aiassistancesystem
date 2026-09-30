@@ -1,0 +1,39 @@
+# Which capabilities exist and in what order (ROADMAP E1). A capability file not
+# listed here, or a listed one that is missing, stops Zedek from starting.
+# routes: semantic-router order. llm_tools: order in the Layer-2 prompt (kept
+# byte-identical for provider prompt caching).
+routes:
+- search_files
+- disk_usage_by_folder
+- top_memory_processes
+- free_space_summary
+- directory_size
+- remember_fact
+- correct_fact
+- coding_task
+- unsupported
+- list_processes_detailed
+- open_application
+- system_inspect
+- research_task
+- academic_tracking
+- web_task
+- mcp_tool
+llm_tools:
+- search_files
+- disk_usage_by_folder
+- top_memory_processes
+- free_space_summary
+- directory_size
+- remember_fact
+- correct_fact
+- coding_task
+- list_processes_detailed
+- open_application
+- system_inspect
+- unsupported
+- research_task
+- academic_tracking
+- web_task
+- mcp_tool
+- general_question

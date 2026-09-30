@@ -1,0 +1,24 @@
+name: list_processes_detailed
+description: >-
+  User wants detailed information about one or more specific running processes, such as CPU usage, runtime,
+  or threads — not just a top-N memory list. Examples: 'why is PID 4052 using so much CPU', 'inspect this
+  background process', 'show threads for python process'.
+tier: 0
+arg_types:
+  top_n: int
+utterances:
+- >-
+  Provide detailed diagnostic analysis and thread CPU inspection for a specific running process ID or
+  explain why a process is using 100 percent CPU.
+- why is this specific PID or process consuming so much CPU and threads
+- inspect detailed runtime metrics and threads for a background process
+- diagnose why CPU usage is pegged at 100 percent by a task
+- why is this process using so much CPU
+short_examples:
+- why is this process using so much cpu
+- what is pid 1234 doing
+- which process is hogging the cpu
+- why is my cpu at 100 percent
+- show threads for this process
+- details about a running process
+- my fan is loud, what's using cpu

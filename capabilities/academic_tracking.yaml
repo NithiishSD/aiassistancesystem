@@ -1,0 +1,25 @@
+name: academic_tracking
+description: >-
+  User wants to log or review their DSA / aptitude / placement-prep practice: recording that they solved
+  or failed a practice problem, asking which topics are weakest, what to study next, or how their progress
+  and streak look. Examples: 'log that I solved a DP problem', 'I failed a graphs question today', 'what
+  are my weak topics', 'what should I practice next', 'show my prep progress'.
+utterances:
+- >-
+  Log, record, or review DSA and aptitude practice progress, problem-solving attempts, weak topics, study
+  streaks, and placement preparation performance.
+- log that I solved a dynamic programming problem today
+- record my practice attempt on graphs, I failed it
+- what are my weakest topics that I should practice
+- show my placement prep progress and accuracy so far
+- what should I study next for my placement preparation
+- how is my DSA practice going and what is my streak
+short_examples:
+- log that i solved a problem
+- i failed today's dsa question
+- what are my weak topics
+- what should i practice next
+- show my practice progress
+- how is my prep going
+- record my leetcode attempt
+- my practice streak

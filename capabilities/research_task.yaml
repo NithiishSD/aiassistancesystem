@@ -1,0 +1,27 @@
+name: research_task
+description: >-
+  User wants a topic researched against real sources and answered with citations: looking something up
+  online, reading a URL they provided, or finding academic papers and studies on arXiv or Semantic Scholar.
+  Choose this over general_question when the user explicitly wants sources, citations, papers, or something
+  looked up rather than answered from memory. Examples: 'research what the latest papers say about transformers',
+  'look this up online and cite your sources', 'find studies on spaced repetition', 'read https://example.com/article
+  and summarize it'.
+utterances:
+- >-
+  Research, investigate, look up, or gather sources on a topic from the internet, Wikipedia, arXiv, or
+  academic papers, and give a cited, evidence-backed explanation.
+- research this topic and tell me what the sources say
+- find academic papers or published studies about this subject
+- look this up online and summarize what you find with citations
+- what does the latest research say about this area
+- search arxiv or semantic scholar for papers on this topic
+- read this url and summarize what it says
+short_examples:
+- find research papers on this topic
+- what do studies say about this
+- look this up with sources
+- search arxiv for papers
+- give me academic sources on
+- research this and cite sources
+- find studies about sleep
+- summarize this article url with citations

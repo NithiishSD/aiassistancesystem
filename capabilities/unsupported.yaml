@@ -1,0 +1,25 @@
+# threshold 0.65, not the 0.55 default: a wrong match refuses the request outright
+# (same DEV measurement as open_application).
+name: unsupported
+description: >-
+  User is asking for an action that Zedek does not support: media/music control, IoT or smart-home control,
+  sending messages, booking services, adjusting hardware settings like brightness or volume, or closing/quitting
+  applications. Examples: 'play Spotify', 'set an alarm', 'turn off lights', 'send a text', 'close Brave'.
+threshold: 0.65
+utterances:
+- >-
+  Requests for unsupported capabilities such as media playback, music control on Spotify, alarms, timers,
+  smart home IoT, cabs, texting, hardware brightness volume controls, or closing quitting applications.
+- play music on Spotify or control audio media playback
+- set an alarm, timer, or smart home light controls
+- close or terminate an application on my computer
+- play some music on Spotify
+short_examples:
+- play a song
+- set a reminder alarm
+- send a text to my friend
+- turn off the wifi
+- call my mom
+- order food
+- book a cab
+- increase the volume

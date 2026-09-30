@@ -1,0 +1,27 @@
+name: system_inspect
+description: >-
+  User wants to inspect, query, or check system metrics, hardware specs, installed packages or applications
+  count, OS version, kernel release, battery status, CPU/GPU info, network IP, uptime, or system environment.
+  Examples: 'how many applications exist in this system', 'how many packages are installed', 'what is
+  my battery level', 'what kernel version is running', 'check CPU model and temperature', 'what is my
+  IP address', 'show system uptime'.
+utterances:
+- >-
+  Inspect, query, check, or report system environment metrics, hardware specifications, installed software
+  package counts, battery percentage, OS kernel version, CPU GPU details, network IP, or system status.
+- how many applications or packages exist on this system
+- how many installed packages do I have
+- what is my laptop battery level and percentage
+- what Linux kernel version is currently running
+- what is my CPU model and hardware specs
+- show system uptime and hostname
+- what is my local IP address
+short_examples:
+- battery level?
+- which kernel version
+- show my network address
+- how many cores do i have
+- what gpu is in this laptop
+- system uptime
+- ubuntu version
+- how much ram is installed

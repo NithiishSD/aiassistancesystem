@@ -293,7 +293,8 @@ no accuracy.
 
 ## Phase E — Structure
 
-### E1. One declarative capability registry
+### E1. One declarative capability registry (phase 1 ✅ DONE 2026-09-30)
+*Phase 1 shipped as OpenSpec change `capability-registry`: `capabilities/<intent>.yaml` (17 files) plus `index.yaml` now define router utterances, thresholds, the Layer-2 tool list, tiers and argument types; five hand-kept tables are derived from them. Loading fails closed, and the tier table is pinned by a test. Migration was byte-for-byte: every table, the Layer-2 prompt bytes, and every golden routing decision (dev and test) are unchanged. **Phase 2:** move handlers and the `execute()` dispatch into capabilities, requirement checks, generated help text.*
 Adding a capability today means editing four files in sync — `classifier.py`,
 `classifier_tools.py`, the `execute()` dispatch, and `tier_gate`. That desynced three
 times in a single session; a consistency test caught each one. A single `CAPABILITIES`
@@ -302,7 +303,7 @@ definition that all four derive from removes the entire bug class.
 **Concrete design, borrowed from OpenClaw and Open Interpreter.** Both now define a
 capability as a folder containing a `SKILL.md` with a small metadata header:
 - [ ] One folder per capability: `capability.yaml` (name, description, router
-      utterances, tier, input schema, required binaries/env vars) plus `handler.py`.
+      utterances, tier, input schema, required binaries/env vars) plus `handler.py`. *Phase 1 done: one YAML file per capability; handlers and requirements are phase 2.*
 - [ ] One loader generates the `classifier.py` routes, the `classifier_tools.py`
       entries, the `tier_gate.py` table, the dispatch, and the help text.
 - [ ] Skip a capability at load time when its requirements are missing. That replaces

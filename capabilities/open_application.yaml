@@ -1,0 +1,35 @@
+# threshold 0.65, not the 0.55 default: a wrong match runs at Tier 1 without asking.
+# Product names ("firefox") dominate MiniLM embeddings; on DEV this raised local
+# precision 94.4% -> 96.2% for -0.5 points of coverage.
+name: open_application
+description: >-
+  User wants to launch, open, or start a specific pre-installed desktop application or program already
+  on their system (e.g. calculator, browser, text editor, terminal). NOT for asking questions about what
+  apps exist, how many apps are installed, or what apps can be opened. NOT for building, creating, coding,
+  or developing new websites, web apps, or programs. Examples: 'open VS Code', 'launch the browser', 'start
+  VLC', 'run the calculator app'.
+threshold: 0.65
+tier: 1
+utterances:
+- >-
+  Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal,
+  browser, files manager, trash, app center, or editor already present on the user's computer. Command
+  to launch a specific program only, not questions about installed software.
+- >-
+  open or launch an installed desktop app like Brave browser, VS Code, App Center, Files, or VLC
+- start the calculator, terminal, trash, or text editor application
+- run an existing installed program on my Linux machine
+- can you open Brave application
+- open the calculator application
+- open app center
+- open files app
+- open trash
+short_examples:
+- open chrome
+- launch spotify app
+- start vs code
+- open the terminal app
+- open my browser
+- launch discord
+- open settings
+- start the calculator

@@ -1,0 +1,28 @@
+name: remember_fact
+description: >-
+  User wants Zedek to remember, store, or note a personal or academic fact about themselves. Examples:
+  'remember I study at PSG College', 'note my reg number is 21BCE001', 'save that my target company is
+  Google'.
+utterances:
+- >-
+  Remember, memorize, store, and record a personal fact, preference, academic detail, schedule, profile
+  information, or statement about the user.
+- remember or note down this personal detail or fact about me
+- save to my profile that I study at this college or have this interest
+- store this fact about my subjects, professors, exams, or life
+- remember that I study at PSG College of Technology
+short_examples:
+- remember that i like chess
+- my brother's name is arjun
+- i prefer tea over coffee
+- note that my exam is next friday
+- i'm vegetarian
+- my favourite colour is blue
+- just so you know i work at night
+- keep in mind i'm left handed
+- i study computer science
+- my phone is a pixel
+- i use firefox for college work
+- my favourite editor is vim
+- i listen to music while coding
+- i keep my todo list in notion

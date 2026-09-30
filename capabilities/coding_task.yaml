@@ -1,0 +1,38 @@
+name: coding_task
+description: >-
+  User wants help with a programming, coding, or software development task: building websites, web pages,
+  HTML/CSS/JS frontend, creating scripts, writing code, debugging, refactoring, explaining algorithms,
+  building apps, or solving coding problems. Examples: 'build a static website using html css', 'create
+  a landing page for my store', 'build a website for grocery shop', 'fix this Python function', 'write
+  a binary search', 'create a FastAPI route'.
+tier: 0
+utterances:
+- >-
+  Write, generate, code, build, debug, fix, refactor, implement, or test computer programs, scripts, algorithms,
+  data structures, HTML CSS web pages, web applications, frontend, backend, APIs, or solve software engineering
+  problems in Python, JavaScript, C++, Java, or any programming language.
+- help me write, fix, debug, or refactor this code or function
+- build a static website, web page, or web app using HTML CSS and JavaScript
+- implement a data structure, algorithm, or script for this problem
+- create a REST API, web scraper, or programming solution with unit tests
+- help me fix this Python code
+- write a C++ program to implement a binary tree
+- can you build me static webite using html css for jewelary store
+- build a website for grocery shop
+short_examples:
+- write a function to sort a list
+- fix this bug in my code
+- write a python script
+- debug my program
+- code a calculator in java
+- implement merge sort
+- write a sql query for this
+- refactor my function
+- make a website with html
+- write unit tests for this code
+- why does my code crash
+- convert this code to python
+- build an app like spotify
+- write a bot for telegram
+- create a browser extension
+- make a clone of an app in react

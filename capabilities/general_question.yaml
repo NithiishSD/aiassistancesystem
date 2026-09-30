@@ -1,0 +1,39 @@
+# The default intent. Its utterances are the negative anchor: concept questions that
+# share an action's vocabulary ("explain what ram is") route here and escalate to the
+# LLM instead of being claimed by an action. Never an action itself.
+name: general_question
+description: >-
+  User is asking a general knowledge question, a conversational question, or anything that does not clearly
+  match any of the specific system actions above. This is the fallback — only choose it if none of the
+  other tools are a clear match. Examples: 'what is a binary tree', 'who invented Linux', 'explain recursion
+  to me'.
+utterances:
+- what is photosynthesis
+- explain how the internet works
+- who was albert einstein
+- what does an api mean
+- how do airplanes fly
+- what is machine learning
+- tell me something interesting
+- how are you
+- what is the difference between ram and rom
+- explain object oriented programming
+- why do we dream
+- what is a linked list
+- how does encryption work
+- what's the history of india
+- give me a fun fact
+- what is an algorithm
+- what is ram used for
+- how does virtual memory work
+- what is a process in an os
+- how are threads different from processes
+- what is a file system
+- how does a hard disk store data
+- what does the cpu cache do
+- what is a kernel
+- how does garbage collection work
+- what is cloud storage
+- what are trees in data structures
+- explain how a heap works
+- what is a graph in computer science

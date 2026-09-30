@@ -1,0 +1,22 @@
+name: top_memory_processes
+description: >-
+  User wants to see which running processes or applications are using the most RAM / memory. Examples:
+  'show memory hogs', 'what is eating my RAM', 'list top RAM-consuming processes'.
+tier: 0
+arg_types:
+  top_n: int
+utterances:
+- >-
+  List, inspect, and monitor active running system processes consuming the highest RAM and physical memory
+  usage.
+- show top RAM hogs and high memory usage applications running right now
+- which process or app is eating all my system memory and RAM
+- check RAM and memory consumption by active processes
+- show the processes using the most RAM
+short_examples:
+- what's eating my ram
+- which apps use the most memory
+- top ram users
+- why is my memory full
+- show memory hungry processes
+- which process uses most ram

@@ -1,0 +1,20 @@
+name: directory_size
+description: >-
+  User wants to know the total size of a specific folder or directory (not a system-wide breakdown). Examples:
+  'how big is my downloads folder', 'total size of project dir'.
+tier: 0
+utterances:
+- >-
+  Calculate, measure, and report the total size and disk space occupied by a specific named folder or
+  directory.
+- how big is this specific folder or project directory in megabytes or gigabytes
+- check the total size of my downloads or project folder
+- calculate exact disk size of a folder path
+- how large is this folder
+short_examples:
+- how big is this folder
+- how big is my photos folder
+- how large is downloads
+- folder size please
+- how much space does this directory use
+- check size of my videos folder

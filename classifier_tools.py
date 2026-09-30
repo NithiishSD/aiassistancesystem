@@ -2,7 +2,7 @@
 
 Used exclusively by ``classifier.py``'s Layer 2 path when the local
 semantic-router score falls below the confidence threshold.  Each tool
-maps to one of Zedek's 12 known intent categories.  The LLM receives
+maps to one of Zedek's intent categories (capabilities/index.yaml).  The LLM receives
 this schema and replies with a single tool-call JSON object identifying
 which function best matches the user's input.
 
@@ -10,179 +10,11 @@ Do NOT import this from orchestrator.py or any other module; it is a
 classifier-internal detail.
 """
 
-ROUTER_TOOLS: list[dict] = [
-    {
-        "name": "search_files",
-        "description": (
-            "User wants to find, locate, or search for a file or directory on "
-            "the local filesystem by name, extension, or path pattern. "
-            "Examples: 'find my resume', 'where is notes.txt', 'search for .cpp files'."
-        ),
-    },
-    {
-        "name": "disk_usage_by_folder",
-        "description": (
-            "User wants to know which folders or directories are consuming the "
-            "most disk space, or wants a breakdown of storage usage by directory. "
-            "Examples: 'which folders are largest', 'show directory storage breakdown'."
-        ),
-    },
-    {
-        "name": "top_memory_processes",
-        "description": (
-            "User wants to see which running processes or applications are using "
-            "the most RAM / memory. "
-            "Examples: 'show memory hogs', 'what is eating my RAM', "
-            "'list top RAM-consuming processes'."
-        ),
-    },
-    {
-        "name": "free_space_summary",
-        "description": (
-            "User wants to know how much free disk space remains overall, or a "
-            "summary of used vs. available storage. "
-            "Examples: 'how much space do I have left', 'is my drive full', "
-            "'show free disk capacity'."
-        ),
-    },
-    {
-        "name": "directory_size",
-        "description": (
-            "User wants to know the total size of a specific folder or directory "
-            "(not a system-wide breakdown). "
-            "Examples: 'how big is my downloads folder', 'total size of project dir'."
-        ),
-    },
-    {
-        "name": "remember_fact",
-        "description": (
-            "User wants Zedek to remember, store, or note a personal or academic "
-            "fact about themselves. "
-            "Examples: 'remember I study at PSG College', 'note my reg number is 21BCE001', "
-            "'save that my target company is Google'."
-        ),
-    },
-    {
-        "name": "correct_fact",
-        "description": (
-            "User wants to update, correct, negate, or retract/delete a previously stored fact "
-            "that is wrong, mistaken, or outdated. "
-            "Examples: 'that college info is wrong, update it', 'no its not correct', "
-            "'no you mistook that, remove it from memory', 'that was incorrect, here is the real value'."
-        ),
-    },
-    {
-        "name": "coding_task",
-        "description": (
-            "User wants help with a programming, coding, or software development task: "
-            "building websites, web pages, HTML/CSS/JS frontend, creating scripts, "
-            "writing code, debugging, refactoring, explaining algorithms, building apps, "
-            "or solving coding problems. "
-            "Examples: 'build a static website using html css', 'create a landing page for my store', "
-            "'build a website for grocery shop', 'fix this Python function', 'write a binary search', "
-            "'create a FastAPI route'."
-        ),
-    },
-    {
-        "name": "list_processes_detailed",
-        "description": (
-            "User wants detailed information about one or more specific running "
-            "processes, such as CPU usage, runtime, or threads — not just a "
-            "top-N memory list. "
-            "Examples: 'why is PID 4052 using so much CPU', "
-            "'inspect this background process', 'show threads for python process'."
-        ),
-    },
-    {
-        "name": "open_application",
-        "description": (
-            "User wants to launch, open, or start a specific pre-installed desktop application "
-            "or program already on their system (e.g. calculator, browser, text editor, terminal). "
-            "NOT for asking questions about what apps exist, how many apps are installed, or what apps can be opened. "
-            "NOT for building, creating, coding, or developing new websites, web apps, or programs. "
-            "Examples: 'open VS Code', 'launch the browser', 'start VLC', "
-            "'run the calculator app'."
-        ),
-    },
-    {
-        "name": "system_inspect",
-        "description": (
-            "User wants to inspect, query, or check system metrics, hardware specs, installed packages "
-            "or applications count, OS version, kernel release, battery status, CPU/GPU info, network IP, "
-            "uptime, or system environment. "
-            "Examples: 'how many applications exist in this system', 'how many packages are installed', "
-            "'what is my battery level', 'what kernel version is running', 'check CPU model and temperature', "
-            "'what is my IP address', 'show system uptime'."
-        ),
-    },
-    {
-        "name": "unsupported",
-        "description": (
-            "User is asking for an action that Zedek does not support: "
-            "media/music control, IoT or smart-home control, sending messages, "
-            "booking services, adjusting hardware settings like brightness or volume, "
-            "or closing/quitting applications. "
-            "Examples: 'play Spotify', 'set an alarm', 'turn off lights', "
-            "'send a text', 'close Brave'."
-        ),
-    },
-    {
-        "name": "research_task",
-        "description": (
-            "User wants a topic researched against real sources and answered with citations: "
-            "looking something up online, reading a URL they provided, or finding academic "
-            "papers and studies on arXiv or Semantic Scholar. "
-            "Choose this over general_question when the user explicitly wants sources, "
-            "citations, papers, or something looked up rather than answered from memory. "
-            "Examples: 'research what the latest papers say about transformers', "
-            "'look this up online and cite your sources', 'find studies on spaced repetition', "
-            "'read https://example.com/article and summarize it'."
-        ),
-    },
-    {
-        "name": "academic_tracking",
-        "description": (
-            "User wants to log or review their DSA / aptitude / placement-prep practice: "
-            "recording that they solved or failed a practice problem, asking which topics "
-            "are weakest, what to study next, or how their progress and streak look. "
-            "Examples: 'log that I solved a DP problem', 'I failed a graphs question today', "
-            "'what are my weak topics', 'what should I practice next', 'show my prep progress'."
-        ),
-    },
-    {
-        "name": "web_task",
-        "description": (
-            "User wants a live web page ACTED ON in a real browser: navigating to a site, "
-            "clicking a button or link, typing into a form field, or taking a screenshot. "
-            "Choose this over research_task when the user wants interaction with a page "
-            "rather than information gathered from sources. Every such action requires "
-            "the user's explicit confirmation before it runs. "
-            "Examples: 'open this site and click the login button', "
-            "'type my email into the form on that page', 'take a screenshot of this web page'."
-        ),
-    },
-    {
-        "name": "mcp_tool",
-        "description": (
-            "User wants to invoke an external MCP-connected tool or service: fetch the "
-            "current time or date, count words in text, summarize text, run a web search, "
-            "query a database, or use any capability provided by a connected MCP server. "
-            "Examples: 'what time is it', 'what is the current time and date', "
-            "'count words in this text', 'give me a word count', 'summarize this paragraph'."
-        ),
-    },
-    {
-        "name": "general_question",
-        "description": (
-            "User is asking a general knowledge question, a conversational question, "
-            "or anything that does not clearly match any of the specific system "
-            "actions above. This is the fallback — only choose it if none of the "
-            "other tools are a clear match. "
-            "Examples: 'what is a binary tree', 'who invented Linux', "
-            "'explain recursion to me'."
-        ),
-    },
-]
+import capabilities
+
+# Name + description per capability, from capabilities/*.yaml in index.yaml's
+# llm_tools order (ROADMAP E1). Nothing else about a capability reaches the LLM.
+ROUTER_TOOLS: list[dict] = capabilities.router_tools()
 
 # Lookup set for fast membership checks (used in classifier.py to validate
 # the LLM's tool-call response before trusting it).

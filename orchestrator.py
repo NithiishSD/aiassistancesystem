@@ -23,6 +23,7 @@ from zedek_logger import get_logger, trace_context
 from system_agent import AVAILABLE_FUNCTIONS
 from tier_gate import gate
 import memory
+import capabilities
 import classifier
 import llm_provider
 import llm_schemas
@@ -1360,12 +1361,7 @@ def _coerce_arg_types(func_name: str, args: dict) -> dict:
     LLM JSON output doesn't guarantee correct Python types (e.g. '10' instead of 10).
     Coerce known integer arguments before they hit the function.
     """
-    int_args = {
-        "top_memory_processes": ["top_n"],
-        "disk_usage_by_folder": ["top_n"],
-        "list_processes_detailed": ["top_n"],
-    }
-    for key in int_args.get(func_name, []):
+    for key in capabilities.int_args().get(func_name, []):  # `arg_types:` in capabilities/*.yaml
         if key in args:
             try:
                 args[key] = int(args[key])

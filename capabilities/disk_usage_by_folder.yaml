@@ -1,0 +1,22 @@
+name: disk_usage_by_folder
+description: >-
+  User wants to know which folders or directories are consuming the most disk space, or wants a breakdown
+  of storage usage by directory. Examples: 'which folders are largest', 'show directory storage breakdown'.
+tier: 0
+arg_types:
+  top_n: int
+utterances:
+- >-
+  Analyze, inspect, breakdown, and list largest directories or subfolders consuming the most disk storage
+  space on the system.
+- show which folders and directories are taking up the most storage space
+- breakdown of disk space usage by directory in home folder
+- find large folders and disk hogs on my hard drive
+- which folders use the most disk space
+short_examples:
+- which folders take up the most space
+- biggest folders on my laptop
+- what is filling my disk
+- show folder sizes in my home
+- largest directories please
+- where is my space going

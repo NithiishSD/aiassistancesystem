@@ -1,0 +1,24 @@
+name: web_task
+description: >-
+  User wants a live web page ACTED ON in a real browser: navigating to a site, clicking a button or link,
+  typing into a form field, or taking a screenshot. Choose this over research_task when the user wants
+  interaction with a page rather than information gathered from sources. Every such action requires the
+  user's explicit confirmation before it runs. Examples: 'open this site and click the login button',
+  'type my email into the form on that page', 'take a screenshot of this web page'.
+utterances:
+- >-
+  Drive a web browser to interact with a live web page: open a site, click a button or link, fill in and
+  type into a form field, or take a screenshot of a page.
+- open this website in a browser and click the button for me
+- fill in this form field on the page with my details
+- take a screenshot of this web page
+- navigate to this site and press the submit link
+- type this text into the search box on that website
+short_examples:
+- click the login button on this site
+- fill in the form on this website
+- take a screenshot of this page
+- type into the search box on the site
+- go to the website and click next
+- submit the form on that page
+- press the button on the webpage

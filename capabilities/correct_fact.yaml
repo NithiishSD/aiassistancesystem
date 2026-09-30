@@ -1,0 +1,26 @@
+name: correct_fact
+description: >-
+  User wants to update, correct, negate, or retract/delete a previously stored fact that is wrong, mistaken,
+  or outdated. Examples: 'that college info is wrong, update it', 'no its not correct', 'no you mistook
+  that, remove it from memory', 'that was incorrect, here is the real value'.
+utterances:
+- >-
+  Correct, update, retract, delete, or negate a previously stored fact, assumption, or detail about the
+  user that is wrong or outdated.
+- that fact is false or incorrect, please update or delete it
+- no that is wrong, you mistook that, remove that from your memory
+- fix what you remembered earlier, change my stored information
+- no its not correct
+- you mistook that, remove that from memory
+- that fact is false, please correct it
+short_examples:
+- that's wrong
+- no, that's not right
+- you remembered that wrong
+- forget what i told you
+- update that, it changed
+- that fact is outdated
+- delete that from memory
+- correction, it's actually wednesday
+- no i said tuesday not monday
+- you got my name wrong

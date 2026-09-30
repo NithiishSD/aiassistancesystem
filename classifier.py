@@ -25,6 +25,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")  # use local cache only, skip netwo
 # (safe because the model is downloaded once on first successful run; if you ever
 # need to re-download or switch models, temporarily unset this or delete the cache)
 
+import capabilities
 # pyrefly: ignore [missing-import]
 from semantic_router import Route, RouteLayer
 # pyrefly: ignore [missing-import]
@@ -63,7 +64,7 @@ DOMAIN_ROUTE_THRESHOLD = 0.65
 # Product names ("firefox", "spotify") dominate MiniLM embeddings and pulled app
 # mentions into these routes; on DEV this raised local precision 94.4% -> 96.2%
 # for -0.5 points of coverage.
-STRICT_INTENT_THRESHOLDS = {"open_application": 0.65, "unsupported": 0.65}
+STRICT_INTENT_THRESHOLDS = capabilities.strict_thresholds()  # `threshold:` in capabilities/*.yaml
 
 # In-memory LRU fast-path cache for instant repeat classifications (< 1ms)
 _ROUTING_CACHE: dict[str, dict] = {}
@@ -130,359 +131,23 @@ AMBIGUOUS_TERMS = {
     "socket": ["Network Socket (IP + Port)", "electrical wall outlet"],
 }
 
-INTENT_UTTERANCES = {
-    "search_files": [
-        "Search, find, locate, discover, or list files, documents, scripts, and directories on the local disk by filename, path, extension, or pattern.",
-        "find where my file or document is stored on my computer",
-        "search the filesystem for files matching a name or extension",
-        "locate my notes, assignments, pdfs, code files, or downloads",
-        "find my resume file",
-        "where did I save my project report",
-        "find all files with extension .cpp",
-    ],
-    "disk_usage_by_folder": [
-        "Analyze, inspect, breakdown, and list largest directories or subfolders consuming the most disk storage space on the system.",
-        "show which folders and directories are taking up the most storage space",
-        "breakdown of disk space usage by directory in home folder",
-        "find large folders and disk hogs on my hard drive",
-        "which folders use the most disk space",
-    ],
-    "top_memory_processes": [
-        "List, inspect, and monitor active running system processes consuming the highest RAM and physical memory usage.",
-        "show top RAM hogs and high memory usage applications running right now",
-        "which process or app is eating all my system memory and RAM",
-        "check RAM and memory consumption by active processes",
-        "show the processes using the most RAM",
-    ],
-    "free_space_summary": [
-        "Check and summarize total, used, and available remaining free disk storage space and drive capacity.",
-        "how much free disk storage space do I have left on my drive",
-        "is my hard drive full and what is the available free storage space",
-        "check remaining gigabytes and disk capacity",
-        "how much free disk space do I have",
-    ],
-    "directory_size": [
-        "Calculate, measure, and report the total size and disk space occupied by a specific named folder or directory.",
-        "how big is this specific folder or project directory in megabytes or gigabytes",
-        "check the total size of my downloads or project folder",
-        "calculate exact disk size of a folder path",
-        "how large is this folder",
-    ],
-    "remember_fact": [
-        "Remember, memorize, store, and record a personal fact, preference, academic detail, schedule, profile information, or statement about the user.",
-        "remember or note down this personal detail or fact about me",
-        "save to my profile that I study at this college or have this interest",
-        "store this fact about my subjects, professors, exams, or life",
-        "remember that I study at PSG College of Technology",
-    ],
-    "correct_fact": [
-        "Correct, update, retract, delete, or negate a previously stored fact, assumption, or detail about the user that is wrong or outdated.",
-        "that fact is false or incorrect, please update or delete it",
-        "no that is wrong, you mistook that, remove that from your memory",
-        "fix what you remembered earlier, change my stored information",
-        "no its not correct",
-        "you mistook that, remove that from memory",
-        "that fact is false, please correct it",
-    ],
-    "coding_task": [
-        "Write, generate, code, build, debug, fix, refactor, implement, or test computer programs, scripts, algorithms, data structures, HTML CSS web pages, web applications, frontend, backend, APIs, or solve software engineering problems in Python, JavaScript, C++, Java, or any programming language.",
-        "help me write, fix, debug, or refactor this code or function",
-        "build a static website, web page, or web app using HTML CSS and JavaScript",
-        "implement a data structure, algorithm, or script for this problem",
-        "create a REST API, web scraper, or programming solution with unit tests",
-        "help me fix this Python code",
-        "write a C++ program to implement a binary tree",
-        "can you build me static webite using html css for jewelary store",
-        "build a website for grocery shop",
-    ],
-    "unsupported": [
-        "Requests for unsupported capabilities such as media playback, music control on Spotify, alarms, timers, smart home IoT, cabs, texting, hardware brightness volume controls, or closing quitting applications.",
-        "play music on Spotify or control audio media playback",
-        "set an alarm, timer, or smart home light controls",
-        "close or terminate an application on my computer",
-        "play some music on Spotify",
-    ],
-    "list_processes_detailed": [
-        "Provide detailed diagnostic analysis and thread CPU inspection for a specific running process ID or explain why a process is using 100 percent CPU.",
-        "why is this specific PID or process consuming so much CPU and threads",
-        "inspect detailed runtime metrics and threads for a background process",
-        "diagnose why CPU usage is pegged at 100 percent by a task",
-        "why is this process using so much CPU",
-    ],
-    "open_application": [
-        "Launch, open, execute, or start a pre-installed desktop software application, tool, GUI program, terminal, browser, files manager, trash, app center, or editor already present on the user's computer. Command to launch a specific program only, not questions about installed software.",
-        "open or launch an installed desktop app like Brave browser, VS Code, App Center, Files, or VLC",
-        "start the calculator, terminal, trash, or text editor application",
-        "run an existing installed program on my Linux machine",
-        "can you open Brave application",
-        "open the calculator application",
-        "open app center",
-        "open files app",
-        "open trash",
-    ],
-    "system_inspect": [
-        "Inspect, query, check, or report system environment metrics, hardware specifications, installed software package counts, battery percentage, OS kernel version, CPU GPU details, network IP, or system status.",
-        "how many applications or packages exist on this system",
-        "how many installed packages do I have",
-        "what is my laptop battery level and percentage",
-        "what Linux kernel version is currently running",
-        "what is my CPU model and hardware specs",
-        "show system uptime and hostname",
-        "what is my local IP address",
-    ],
-    "research_task": [
-        "Research, investigate, look up, or gather sources on a topic from the internet, Wikipedia, arXiv, or academic papers, and give a cited, evidence-backed explanation.",
-        "research this topic and tell me what the sources say",
-        "find academic papers or published studies about this subject",
-        "look this up online and summarize what you find with citations",
-        "what does the latest research say about this area",
-        "search arxiv or semantic scholar for papers on this topic",
-        "read this url and summarize what it says",
-    ],
-    "academic_tracking": [
-        "Log, record, or review DSA and aptitude practice progress, problem-solving attempts, weak topics, study streaks, and placement preparation performance.",
-        "log that I solved a dynamic programming problem today",
-        "record my practice attempt on graphs, I failed it",
-        "what are my weakest topics that I should practice",
-        "show my placement prep progress and accuracy so far",
-        "what should I study next for my placement preparation",
-        "how is my DSA practice going and what is my streak",
-    ],
-    "web_task": [
-        "Drive a web browser to interact with a live web page: open a site, click a button or link, fill in and type into a form field, or take a screenshot of a page.",
-        "open this website in a browser and click the button for me",
-        "fill in this form field on the page with my details",
-        "take a screenshot of this web page",
-        "navigate to this site and press the submit link",
-        "type this text into the search box on that website",
-    ],
-    "mcp_tool": [
-        "Use an external connected MCP tool or service to get information, query data, count words, check time, or run a task.",
-        "what time is it right now",
-        "tell me the current date and time",
-        "count the words in this text",
-        "how many words are in this paragraph",
-        "give me a brief summary of this text",
-        "what is the current time and date",
-    ],
-}
-
+# Router utterances live in capabilities/<intent>.yaml (ROADMAP E1): the
+# descriptive phrases first, then the short examples.
 # Short, realistic example phrases (OpenSpec change improve-layer1-coverage).
 # The phrases above open with a 20-40 word description that real requests embed
 # far from ("write a python function to reverse a linked list" scored 0.42 against
 # coding_task). Measured on the golden DEV slice: local coverage 28.4% -> 55.7% at
 # precision 96.2% -> 97.0%. None of these is within 0.90 cosine of a held-out test
 # row (enforced by tests/test_routing_eval.py).
-SHORT_EXAMPLE_UTTERANCES = {
-    'search_files': [
-        'find my notes pdf',
-        'where is my offer letter',
-        'search for my report file',
-        'locate the spreadsheet i made',
-        'find all my python files',
-        'where did i save the slides',
-        'look for a file called draft',
-        'find the pdf i downloaded',
-        'search my laptop for photos',
-    ],
-    'disk_usage_by_folder': [
-        'which folders take up the most space',
-        'biggest folders on my laptop',
-        'what is filling my disk',
-        'show folder sizes in my home',
-        'largest directories please',
-        'where is my space going',
-    ],
-    'top_memory_processes': [
-        "what's eating my ram",
-        'which apps use the most memory',
-        'top ram users',
-        'why is my memory full',
-        'show memory hungry processes',
-        'which process uses most ram',
-    ],
-    'free_space_summary': [
-        'how much storage do i have left',
-        'is my disk full',
-        'free space left?',
-        'how much room on my drive',
-        'remaining disk space',
-        'any storage left on this machine',
-    ],
-    'directory_size': [
-        'how big is this folder',
-        'how big is my photos folder',
-        'how large is downloads',
-        'folder size please',
-        'how much space does this directory use',
-        'check size of my videos folder',
-    ],
-    'remember_fact': [
-        'remember that i like chess',
-        "my brother's name is arjun",
-        'i prefer tea over coffee',
-        'note that my exam is next friday',
-        "i'm vegetarian",
-        'my favourite colour is blue',
-        'just so you know i work at night',
-        "keep in mind i'm left handed",
-        'i study computer science',
-        'my phone is a pixel',
-        # Statements that mention an app are facts, not launch requests.
-        'i use firefox for college work',
-        'my favourite editor is vim',
-        'i listen to music while coding',
-        'i keep my todo list in notion',
-    ],
-    'correct_fact': [
-        "that's wrong",
-        "no, that's not right",
-        'you remembered that wrong',
-        'forget what i told you',
-        'update that, it changed',
-        'that fact is outdated',
-        'delete that from memory',
-        "correction, it's actually wednesday",
-        'no i said tuesday not monday',
-        'you got my name wrong',
-    ],
-    'coding_task': [
-        'write a function to sort a list',
-        'fix this bug in my code',
-        'write a python script',
-        'debug my program',
-        'code a calculator in java',
-        'implement merge sort',
-        'write a sql query for this',
-        'refactor my function',
-        'make a website with html',
-        'write unit tests for this code',
-        'why does my code crash',
-        'convert this code to python',
-        # Building something that names an app is still coding.
-        'build an app like spotify',
-        'write a bot for telegram',
-        'create a browser extension',
-        'make a clone of an app in react',
-    ],
-    'unsupported': [
-        'play a song',
-        'set a reminder alarm',
-        'send a text to my friend',
-        'turn off the wifi',
-        'call my mom',
-        'order food',
-        'book a cab',
-        'increase the volume',
-    ],
-    'list_processes_detailed': [
-        'why is this process using so much cpu',
-        'what is pid 1234 doing',
-        'which process is hogging the cpu',
-        'why is my cpu at 100 percent',
-        'show threads for this process',
-        'details about a running process',
-        "my fan is loud, what's using cpu",
-    ],
-    'open_application': [
-        'open chrome',
-        'launch spotify app',
-        'start vs code',
-        'open the terminal app',
-        'open my browser',
-        'launch discord',
-        'open settings',
-        'start the calculator',
-    ],
-    'system_inspect': [
-        'battery level?',
-        'which kernel version',
-        'show my network address',
-        'how many cores do i have',
-        'what gpu is in this laptop',
-        'system uptime',
-        'ubuntu version',
-        'how much ram is installed',
-    ],
-    'research_task': [
-        'find research papers on this topic',
-        'what do studies say about this',
-        'look this up with sources',
-        'search arxiv for papers',
-        'give me academic sources on',
-        'research this and cite sources',
-        'find studies about sleep',
-        'summarize this article url with citations',
-    ],
-    'academic_tracking': [
-        'log that i solved a problem',
-        "i failed today's dsa question",
-        'what are my weak topics',
-        'what should i practice next',
-        'show my practice progress',
-        'how is my prep going',
-        'record my leetcode attempt',
-        'my practice streak',
-    ],
-    'web_task': [
-        'click the login button on this site',
-        'fill in the form on this website',
-        'take a screenshot of this page',
-        'type into the search box on the site',
-        'go to the website and click next',
-        'submit the form on that page',
-        'press the button on the webpage',
-    ],
-    'mcp_tool': [
-        'what time is it now',
-        'what date is it',
-        'count words in this text',
-        'weather in mumbai',
-        'latest news headlines',
-        'codeforces rating of a user',
-        'search github repos',
-        'summarize this paragraph',
-    ],
-}
-for _intent, _phrases in SHORT_EXAMPLE_UTTERANCES.items():
-    INTENT_UTTERANCES[_intent].extend(_phrases)
+INTENT_UTTERANCES = capabilities.intent_utterances()
+SHORT_EXAMPLE_UTTERANCES = capabilities.short_example_utterances()
 
 # Negative anchor: explanation-style and concept questions. Routed as
 # DEFAULT_INTENT, so classify_intent escalates them exactly as today and they never
 # become an action. Without it, concept questions sharing an action's vocabulary
 # ("explain what ram is") were claimed by that action. Kept out of INTENT_UTTERANCES
 # because those keys define the routable intents.
-GENERAL_ANCHOR_UTTERANCES = [
-    'what is photosynthesis',
-    'explain how the internet works',
-    'who was albert einstein',
-    'what does an api mean',
-    'how do airplanes fly',
-    'what is machine learning',
-    'tell me something interesting',
-    'how are you',
-    'what is the difference between ram and rom',
-    'explain object oriented programming',
-    'why do we dream',
-    'what is a linked list',
-    'how does encryption work',
-    "what's the history of india",
-    'give me a fun fact',
-    'what is an algorithm',
-    'what is ram used for',
-    'how does virtual memory work',
-    'what is a process in an os',
-    'how are threads different from processes',
-    'what is a file system',
-    'how does a hard disk store data',
-    'what does the cpu cache do',
-    'what is a kernel',
-    'how does garbage collection work',
-    'what is cloud storage',
-    'what are trees in data structures',
-    'explain how a heap works',
-    'what is a graph in computer science',
-]
+GENERAL_ANCHOR_UTTERANCES = capabilities.general_anchor_utterances()  # capabilities/general_question.yaml
 
 
 DOMAIN_UTTERANCES = {

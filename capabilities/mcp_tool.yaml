@@ -1,0 +1,25 @@
+name: mcp_tool
+description: >-
+  User wants to invoke an external MCP-connected tool or service: fetch the current time or date, count
+  words in text, summarize text, run a web search, query a database, or use any capability provided by
+  a connected MCP server. Examples: 'what time is it', 'what is the current time and date', 'count words
+  in this text', 'give me a word count', 'summarize this paragraph'.
+utterances:
+- >-
+  Use an external connected MCP tool or service to get information, query data, count words, check time,
+  or run a task.
+- what time is it right now
+- tell me the current date and time
+- count the words in this text
+- how many words are in this paragraph
+- give me a brief summary of this text
+- what is the current time and date
+short_examples:
+- what time is it now
+- what date is it
+- count words in this text
+- weather in mumbai
+- latest news headlines
+- codeforces rating of a user
+- search github repos
+- summarize this paragraph

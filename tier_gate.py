@@ -20,24 +20,18 @@ from __future__ import annotations
 
 import re
 
+import capabilities
+
 from zedek_logger import get_logger
 
 log = get_logger("tier_gate")
 
 # --- Rule-based tier assignment, per function name ---
-# Every currently-available function is Tier 0 (read-only, system_agent).
-# This map is intentionally explicit (not a default) so a new function added
-# later without an entry here fails safe rather than silently running.
-FUNCTION_TIERS = {
-    "search_files": 0,
-    "disk_usage_by_folder": 0,
-    "top_memory_processes": 0,
-    "free_space_summary": 0,
-    "directory_size": 0,
-    "list_processes_detailed": 0,
-    "open_application": 1,
-    "coding_task": 0,
-}
+# From `tier:` in capabilities/*.yaml (ROADMAP E1); pinned by
+# tests/test_capabilities.py so no tier changes without a reviewed test edit.
+# Explicit, not a default: a function with no tier fails safe (Tier 3) rather
+# than silently running. A malformed capability file stops Zedek at import.
+FUNCTION_TIERS = capabilities.function_tiers()
 
 # --- Hard pattern escalation (args + user input) ---
 # Regardless of which function/agent proposes an action, if these patterns
