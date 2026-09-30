@@ -181,10 +181,11 @@ Tier 1. **That lane fails open.**
 ### B4. Egress allowlist for network-enabled sandbox runs
 - [ ] When `allow_network=True`, restrict to an FQDN allowlist rather than the open internet.
 
-### B5. Neuter non-source URLs in research output
+### B5. Neuter non-source URLs in research output ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `research-link-policy`: only links the user typed or that appear in trusted sources (memory, Wikipedia, arXiv, Semantic Scholar) survive; links found only inside fetched pages, or invented by the model, become `[unverified link removed: host[.]tld]` with a note. Lookalike hosts and `user@host` tricks are caught; the raw-source fallback is covered too.*
 Lower risk than B1 (the output is text to the user, with no subsequent tool call), but a
 crafted page could still induce a malicious link.
-- [ ] Strip or mark links in synthesized answers that don't appear in the source list.
+- [x] Strip or mark links in synthesized answers that don't appear in the source list.
 
 ### B6. Invisible-Unicode sanitizer and LLM-declared risk
 Block's red team got code execution on employee laptops through its own Goose agent.

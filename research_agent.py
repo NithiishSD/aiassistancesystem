@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 import llm_provider
 import llm_schemas
@@ -59,6 +60,49 @@ RAW_DOC_CHAR_CAP = 20000         # safety bound before chunking; tools cap lower
 _PASSAGE_SEPARATOR = "\n…\n"
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
+
+# Links in an answer (ROADMAP B5). A crafted page can make the synthesizer emit
+# a malicious link. Only links the user typed, or that came from sources whose
+# content is not arbitrary web text, survive; the rest are defanged.
+_TRUSTED_LINK_ORIGINS = {"memory", "wikipedia", "arxiv", "semantic_scholar"}
+_URL_TRAILING = ".,;:!?)]}>'\"*_`"
+
+
+def _normalize_url(url: str) -> str:
+    """Comparable form: scheme-less, lowercase host, no trailing slash or punctuation."""
+    parts = urlsplit(url.rstrip(_URL_TRAILING))
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    path = parts.path.rstrip("/")
+    return f"{host}{path}" + (f"?{parts.query}" if parts.query else "")
+
+
+def allowed_links(question: str, sources: list["Source"]) -> set[str]:
+    """Normalized URLs an answer may contain."""
+    urls = extract_urls(question)
+    for source in sources:
+        if source.origin.startswith("url:"):
+            urls.append(source.origin[len("url:"):])  # the page the user asked for, not its links
+        elif source.origin in _TRUSTED_LINK_ORIGINS:
+            urls.extend(extract_urls(source.content))
+    return {_normalize_url(u) for u in urls}
+
+
+def defang_unsourced_links(text: str, allowed: set[str]) -> tuple[str, list[str]]:
+    """Replace links not in `allowed` with a non-clickable marker; returns the
+    new text and the hosts that were removed."""
+    removed: list[str] = []
+
+    def replace(match: re.Match) -> str:
+        raw = match.group(0)
+        url = raw.rstrip(_URL_TRAILING)
+        if _normalize_url(url) in allowed:
+            return raw
+        host = (urlsplit(url).hostname or "unknown").lower()
+        removed.append(host)
+        return f"[unverified link removed: {host.replace('.', '[.]')}]" + raw[len(url):]
+
+    return _URL_RE.sub(replace, text or ""), removed
+
 
 # The research tools report "nothing found" in-band as ordinary text. That is a
 # negative result, not evidence — counting it as a source would inflate the
@@ -464,10 +508,15 @@ Rules:
         queries = self.plan_queries(question)
         sources = select_passages(question, self.gather(question, queries, domain=domain))
         answer = self.synthesize(question, sources)
+        answer, removed_hosts = defang_unsourced_links(answer, allowed_links(question, sources))
 
         notes: list[str] = []
         if not sources:
             notes.append("No sources retrieved — answer is not grounded.")
+        if removed_hosts:
+            log.info("research_links_defanged", extra={"count": len(removed_hosts), "hosts": removed_hosts[:10]})
+            notes.append(f"Removed {len(removed_hosts)} link(s) that did not come from your question "
+                         "or a trusted source.")
 
         report = ResearchReport(
             question=question,
