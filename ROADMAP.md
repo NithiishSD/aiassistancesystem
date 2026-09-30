@@ -293,8 +293,9 @@ no accuracy.
 
 ## Phase E — Structure
 
-### E1. One declarative capability registry (phase 1 ✅ DONE 2026-09-30)
-*Phase 1 shipped as OpenSpec change `capability-registry`: `capabilities/<intent>.yaml` (17 files) plus `index.yaml` now define router utterances, thresholds, the Layer-2 tool list, tiers and argument types; five hand-kept tables are derived from them. Loading fails closed, and the tier table is pinned by a test. Migration was byte-for-byte: every table, the Layer-2 prompt bytes, and every golden routing decision (dev and test) are unchanged. **Phase 2:** move handlers and the `execute()` dispatch into capabilities, requirement checks, generated help text.*
+### E1. One declarative capability registry (phases 1–2 ✅ DONE 2026-09-30)
+*Phase 1 shipped as OpenSpec change `capability-registry`: `capabilities/<intent>.yaml` (17 files) plus `index.yaml` now define router utterances, thresholds, the Layer-2 tool list, tiers and argument types; five hand-kept tables are derived from them. Loading fails closed, and the tier table is pinned by a test. Migration was byte-for-byte: every table, the Layer-2 prompt bytes, and every golden routing decision (dev and test) are unchanged.*
+*Phase 2 shipped as OpenSpec change `capability-dispatch`: each capability names its handler and a user-facing summary; `execute()` is a registry lookup instead of a 200-line if-chain (branch bodies moved verbatim, mechanically checked); a missing handler stops startup; the REPL `help` command is generated. `coding_task`'s old run-before-the-low-confidence-check ordering is now an explicit `runs_when_unsure: true`.*
 Adding a capability today means editing four files in sync — `classifier.py`,
 `classifier_tools.py`, the `execute()` dispatch, and `tier_gate`. That desynced three
 times in a single session; a consistency test caught each one. A single `CAPABILITIES`
@@ -303,11 +304,11 @@ definition that all four derive from removes the entire bug class.
 **Concrete design, borrowed from OpenClaw and Open Interpreter.** Both now define a
 capability as a folder containing a `SKILL.md` with a small metadata header:
 - [ ] One folder per capability: `capability.yaml` (name, description, router
-      utterances, tier, input schema, required binaries/env vars) plus `handler.py`. *Phase 1 done: one YAML file per capability; handlers and requirements are phase 2.*
-- [ ] One loader generates the `classifier.py` routes, the `classifier_tools.py`
+      utterances, tier, input schema, required binaries/env vars) plus `handler.py`. *Done as one YAML per capability that names its handler; the handlers still live in `orchestrator.py`. Moving each into its own module is mechanical and can follow when a handler is next touched.*
+- [x] One loader generates the `classifier.py` routes, the `classifier_tools.py`
       entries, the `tier_gate.py` table, the dispatch, and the help text.
 - [ ] Skip a capability at load time when its requirements are missing. That replaces
-      today's scattered `available()` probes.
+      today's scattered `available()` probes. *Deferred: skipping a route would push its requests into other intents, and a wrong declaration would hide a working capability. If done, answer "X is unavailable because Y" instead of skipping, and measure against the golden set.*
 - [ ] Only name + description go into any LLM prompt, within a fixed budget. OpenClaw
       spends about 24 tokens per skill and drops descriptions first when over budget.
 - [ ] The `input schema` field also feeds F2's structured-output adapter.

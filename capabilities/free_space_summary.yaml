@@ -1,4 +1,6 @@
 name: free_space_summary
+summary: Report free and used disk space.
+handler: _run_native_function
 description: >-
   User wants to know how much free disk space remains overall, or a summary of used vs. available storage.
   Examples: 'how much space do I have left', 'is my drive full', 'show free disk capacity'.

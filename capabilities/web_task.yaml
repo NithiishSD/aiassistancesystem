@@ -1,4 +1,6 @@
 name: web_task
+summary: Browse a website for you (navigate, click, screenshot), confirming risky steps.
+handler: _run_web_task
 description: >-
   User wants a live web page ACTED ON in a real browser: navigating to a site, clicking a button or link,
   typing into a form field, or taking a screenshot. Choose this over research_task when the user wants

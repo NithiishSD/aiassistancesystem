@@ -106,3 +106,79 @@ def test_default_intent_cannot_be_a_route(registry):
     (registry / "index.yaml").write_text(yaml.safe_dump(index))
     with pytest.raises(capabilities.CapabilityError):
         capabilities._load(str(registry))
+
+
+# ── Phase 2: dispatch and help come from the registry ────────────────────────
+
+import orchestrator  # noqa: E402
+
+
+def test_every_capability_has_a_callable_handler():
+    for cap in capabilities.CAPABILITIES.values():
+        assert callable(getattr(orchestrator, cap.handler, None)), cap.name
+
+
+def test_native_functions_use_the_gated_native_handler():
+    for name in AVAILABLE_FUNCTIONS:
+        assert capabilities.CAPABILITIES[name].handler == "_run_native_function"
+    for name, cap in capabilities.CAPABILITIES.items():
+        if cap.handler == "_run_native_function":
+            assert name in AVAILABLE_FUNCTIONS, name
+
+
+def test_only_coding_runs_when_unsure():
+    assert [n for n, c in capabilities.CAPABILITIES.items() if c.runs_when_unsure] == ["coding_task"]
+
+
+def test_missing_handler_stops_startup(monkeypatch):
+    fake = capabilities.Capability(name="x", summary="s", handler="_no_such_handler", description="d",
+                                   utterances=("u",))
+    monkeypatch.setitem(capabilities.CAPABILITIES, "x", fake)
+    with pytest.raises(capabilities.CapabilityError, match="_no_such_handler"):
+        orchestrator._check_capability_handlers()
+
+
+@pytest.mark.parametrize("function,handler", [
+    ("remember_fact", "_run_remember_fact"), ("correct_fact", "_run_correct_fact"),
+    ("research_task", "_run_research_task"), ("web_task", "_run_web_task"),
+    ("mcp_tool", "_run_mcp_tool"), ("unsupported", "_run_unsupported"),
+    ("search_files", "_run_native_function"), (None, "_run_general_question"),
+])
+def test_dispatch_reaches_the_declared_handler(monkeypatch, function, handler):
+    monkeypatch.setattr(orchestrator, handler, lambda decision, domain: f"handled:{domain}")
+    decision = {"function": function, "confidence": "high", "_original_input": "x", "domain": "academic"}
+    assert orchestrator.execute(decision) == "handled:academic"
+
+
+def test_low_confidence_falls_back_except_coding(monkeypatch):
+    monkeypatch.setattr(orchestrator, "answer_general_question", lambda text, domain: "fallback")
+    monkeypatch.setattr(orchestrator, "_run_coding_task", lambda decision, domain: "coding")
+    monkeypatch.setattr(orchestrator, "_run_native_function", lambda d, dom: pytest.fail("acted while unsure"))
+    low = {"confidence": "low", "_original_input": "x"}
+    assert orchestrator.execute({**low, "function": "search_files"}) == "fallback"
+    assert orchestrator.execute({**low, "function": "coding_task"}) == "coding"
+
+
+def test_unknown_function_blocked():
+    assert orchestrator.execute({"function": "rm_everything", "_original_input": "x"}).startswith("Blocked")
+
+
+def test_native_path_still_gates(monkeypatch):
+    calls = []
+    monkeypatch.setattr(orchestrator, "gate", lambda name, args, user_input="": (
+        calls.append(name), {"action": "blocked", "message": "nope", "tier": 3})[1])
+    monkeypatch.setitem(orchestrator.AVAILABLE_FUNCTIONS, "search_files", lambda **k: pytest.fail("ran"))
+    out = orchestrator.execute({"function": "search_files", "args": {"query": "x"}, "_original_input": "x"})
+    assert out == "nope" and calls == ["search_files"]
+
+
+def test_help_lists_every_user_facing_capability():
+    text = capabilities.help_text()
+    for name, cap in capabilities.CAPABILITIES.items():
+        assert (cap.summary in text) is (name != "unsupported")
+
+
+def test_qualified_mcp_name_goes_to_the_mcp_gate(monkeypatch):
+    monkeypatch.setattr(orchestrator, "_execute_mcp_tool", lambda decision: "mcp:" + decision["function"])
+    out = orchestrator.execute({"function": "mcp_weather_news_tools_get_weather", "_original_input": "x"})
+    assert out == "mcp:mcp_weather_news_tools_get_weather"

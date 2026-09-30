@@ -1,4 +1,6 @@
 name: research_task
+summary: Research a topic from the web and papers, with sources.
+handler: _run_research_task
 description: >-
   User wants a topic researched against real sources and answered with citations: looking something up
   online, reading a URL they provided, or finding academic papers and studies on arXiv or Semantic Scholar.

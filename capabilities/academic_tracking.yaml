@@ -1,4 +1,6 @@
 name: academic_tracking
+summary: Track courses, exams and assignments.
+handler: _run_academic_tracking
 description: >-
   User wants to log or review their DSA / aptitude / placement-prep practice: recording that they solved
   or failed a practice problem, asking which topics are weakest, what to study next, or how their progress

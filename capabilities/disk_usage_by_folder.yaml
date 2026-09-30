@@ -1,4 +1,6 @@
 name: disk_usage_by_folder
+summary: Show which folders take up the most disk space.
+handler: _run_native_function
 description: >-
   User wants to know which folders or directories are consuming the most disk space, or wants a breakdown
   of storage usage by directory. Examples: 'which folders are largest', 'show directory storage breakdown'.

@@ -1,10 +1,13 @@
 """One declarative definition per capability (ROADMAP E1).
 
-Each ``<name>.yaml`` in this folder holds a capability's name, its description
-(the only text an LLM sees about it), its router utterances, and optionally its
-route threshold, tier and argument types. ``index.yaml`` lists which exist and in
-what order. The classifier routes, the Layer-2 tool list, the tier table and the
-argument coercion are all derived from here, so they cannot drift apart.
+Each ``<name>.yaml`` in this folder holds a capability's name, a one-line
+user-facing summary, its handler (a function in orchestrator.py taking
+``(decision, domain)``), its description (the only text an LLM sees about it),
+its router utterances, and optionally its route threshold, tier, argument types
+and ``runs_when_unsure``. ``index.yaml`` lists which exist and in
+what order. The classifier routes, the Layer-2 tool list, the tier table, the argument
+coercion, the dispatch in orchestrator.execute() and the REPL help are all
+derived from here, so they cannot drift apart.
 
 Loading fails closed: a malformed file, an unknown key, an out-of-range tier, or
 a mismatch between index.yaml and the files raises at import, so Zedek does not
@@ -22,7 +25,8 @@ import yaml
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_INTENT = "general_question"
-_ALLOWED_KEYS = {"name", "description", "threshold", "tier", "arg_types", "utterances", "short_examples"}
+_ALLOWED_KEYS = {"name", "summary", "handler", "description", "threshold", "tier", "arg_types",
+                 "utterances", "short_examples", "runs_when_unsure"}
 _ARG_TYPES = {"int"}
 
 
@@ -33,12 +37,15 @@ class CapabilityError(ValueError):
 @dataclass(frozen=True)
 class Capability:
     name: str
+    summary: str
+    handler: str
     description: str
     utterances: tuple[str, ...]
     short_examples: tuple[str, ...] = ()
     threshold: float | None = None
     tier: int | None = None  # None: gated inside its handler, never by intent name
     arg_types: Mapping[str, str] = field(default_factory=dict)
+    runs_when_unsure: bool = False  # dispatched even on a low-confidence route
 
 
 def _string_list(value: Any, where: str, allow_empty: bool) -> tuple[str, ...]:
@@ -58,6 +65,15 @@ def _parse(name: str, doc: Any) -> Capability:
         raise CapabilityError(f"{where}: unknown keys {sorted(unknown)}")
     if doc.get("name") != name:
         raise CapabilityError(f"{where}: name must be {name!r}")
+    summary = doc.get("summary")
+    if not isinstance(summary, str) or not summary.strip() or "\n" in summary.strip():
+        raise CapabilityError(f"{where}: summary must be one non-empty line")
+    handler = doc.get("handler")
+    if not isinstance(handler, str) or not handler.isidentifier():
+        raise CapabilityError(f"{where}: handler must be a function name")
+    runs_when_unsure = doc.get("runs_when_unsure", False)
+    if not isinstance(runs_when_unsure, bool):
+        raise CapabilityError(f"{where}: runs_when_unsure must be true or false")
     description = doc.get("description")
     if not isinstance(description, str) or not description.strip():
         raise CapabilityError(f"{where}: description is required")
@@ -78,12 +94,15 @@ def _parse(name: str, doc: Any) -> Capability:
 
     return Capability(
         name=name,
+        summary=summary.strip(),
+        handler=handler,
         description=description,
         utterances=_string_list(doc.get("utterances"), f"{where}: utterances", allow_empty=False),
         short_examples=_string_list(doc.get("short_examples", []), f"{where}: short_examples", allow_empty=True),
         threshold=float(threshold) if threshold is not None else None,
         tier=tier,
         arg_types=MappingProxyType(dict(arg_types)),
+        runs_when_unsure=runs_when_unsure,
     )
 
 
@@ -146,3 +165,9 @@ def function_tiers() -> dict[str, int]:
 
 def int_args() -> dict[str, list[str]]:
     return {n: [a for a, t in c.arg_types.items() if t == "int"] for n, c in CAPABILITIES.items() if c.arg_types}
+
+
+def help_text() -> str:
+    """What Zedek can do, one line per capability, for the REPL `help` command."""
+    lines = [f"  - {CAPABILITIES[n].summary}" for n in LLM_TOOL_ORDER if n != "unsupported"]
+    return "Here's what I can do:\n" + "\n".join(lines)

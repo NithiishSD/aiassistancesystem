@@ -1061,8 +1061,10 @@ def _execute_mcp_tool(decision: dict) -> str:
 
 
 def execute(decision: dict) -> str:
-    """Validates the routing decision against the allowlist, runs it through
-    the tier gate, and executes only if the gate allows it."""
+    """Validates the routing decision against the capability registry and hands
+    it to that capability's handler (``handler:`` in capabilities/<name>.yaml).
+    Gating lives in the handlers: the tier gate for native functions and MCP
+    tools, the coding checkpoints, the agents' per-tool gates."""
     func_name = decision.get("function")
     domain = decision.get("domain", "personal")
     if domain not in ("personal", "academic"):
@@ -1070,110 +1072,10 @@ def execute(decision: dict) -> str:
 
     confidence = decision.get("confidence", "high")
     original_input = decision.get("_original_input", "")
+    capability = capabilities.CAPABILITIES.get(func_name) if func_name else None
 
-    if func_name == "coding_task":
-        # ── Checkpoint 1: Tier gate ──────────────────────────────────────
-        coding_gate = gate("coding_task", {}, user_input=original_input)
-        if coding_gate["action"] == "blocked":
-            return coding_gate["message"]
-        if coding_gate["action"] == "confirm":
-            print(coding_gate["message"])
-            if input("> ").strip().lower() != "y":
-                log.info("coding_task_confirmation_denied", extra={})
-                return "Cancelled."
-            log.info("coding_task_confirmation_granted", extra={})
-
-        # ── Checkpoint 2: Plan approval ──────────────────────────────────
-        plan = CODING_SPECIALIST.plan_task(original_input)
-        print("\n" + "=" * 60)
-        print("📋 CODING PLAN")
-        print("=" * 60)
-        print(f"Goal: {plan.get('goal', 'N/A')}")
-        print("\nSteps:")
-        for i, step in enumerate(plan.get('steps', []), 1):
-            print(f"  {i}. {step}")
-        if plan.get('files_to_create'):
-            print(f"\nNew files: {', '.join(plan['files_to_create'])}")
-        if plan.get('files_to_modify'):
-            print(f"Modify: {', '.join(plan['files_to_modify'])}")
-        if plan.get('risks'):
-            print(f"\n⚠️  Risks: {', '.join(plan['risks'])}")
-        print(f"\nConstraints: {', '.join(plan.get('constraints', []))}")
-        print("=" * 60)
-        print("Approve this plan? (y/n)")
-        if input("> ").strip().lower() != "y":
-            log.info("coding_plan_rejected", extra={"goal": plan.get("goal", "")})
-            return "Plan rejected. No code was generated or modified."
-        log.info("coding_plan_approved", extra={"goal": plan.get("goal", "")})
-
-        # Execution verified: plan approved by user
-        if decision.get("via_llm"):
-            classifier.add_utterance_dynamically(original_input, "coding_task")
-
-        # Register the approved plan with the watchdog so any write to a file
-        # the user never approved is caught before it reaches the apply prompt.
-        plan_id = WATCHDOG.register_plan(
-            goal=plan.get("goal", original_input),
-            allowed_actions=_declared_write_targets(plan),
-            steps=plan.get("steps", []),
-        )
-
-        # ── Execute: patch → test → verify ───────────────────────────────
-        # The approved plan is passed back in so code is generated against the
-        # plan the user actually saw, not a regenerated one.
-        result = CODING_SPECIALIST.implement_and_verify(original_input, plan=plan)
-        log.info("coding_task_verified", extra={
-            "status": result["status"],
-            "attempts": result["attempts"],
-        })
-
-        # Show result summary
-        summary = format_coding_result(result)
-        print(summary)
-
-        # ── Watchdog: does the patch target a file the plan declared? ────
-        target_file = (result.get("patch") or {}).get("target_file", "")
-        if target_file:
-            verdict = WATCHDOG.observe(
-                plan_id, f"write:{target_file}", {"target_file": target_file}, tier=2,
-            )
-            if not verdict.allowed:
-                log.info("coding_patch_blocked_by_watchdog", extra={
-                    "target_file": target_file, "reason": verdict.reason,
-                })
-                return (
-                    f"{summary}\n\n⛔ Watchdog blocked this patch: {verdict.reason}\n"
-                    "Nothing was written. Re-run the request if you want this file included in the plan."
-                )
-
-        # ── Checkpoint 3: File application approval ──────────────────────
-        if result["status"] in ("passed", "unverified") and result.get("patch"):
-            review = result.get("review", {})
-            review_note = ""
-            if review.get("approved"):
-                review_note = f" (LLM reviewer approved: {review.get('summary', '')})"
-            elif review:
-                review_note = f" (LLM reviewer flagged issues: {', '.join(review.get('issues', []))})"
-
-            print(f"\n{'=' * 60}")
-            print(f"💾 APPLY CHANGES?{review_note}")
-            print(f"Target: {result['patch'].get('target_file', 'N/A')}")
-            print(f"{'=' * 60}")
-            print("Write this code to the file? (y/n)")
-            if input("> ").strip().lower() == "y":
-                apply_result = CODING_SPECIALIST.apply_patch(result["patch"])
-                if apply_result["applied"]:
-                    backup_note = f" Backup at: {apply_result['backup']}" if apply_result.get("backup") else ""
-                    log.info("coding_patch_applied", extra=apply_result)
-                    return f"{summary}\n\n✅ Changes applied to {apply_result['file']} ({apply_result['lines_written']} lines).{backup_note}"
-                else:
-                    log.info("coding_patch_apply_failed", extra=apply_result)
-                    return f"{summary}\n\n❌ Failed to apply changes: {apply_result.get('error', 'unknown')}"
-            else:
-                log.info("coding_patch_application_declined", extra={})
-                return f"{summary}\n\nChanges NOT applied (code was generated but not written to disk)."
-
-        return summary
+    if capability is not None and capability.runs_when_unsure:
+        return _capability_handler(capability)(decision, domain)
 
     # Low-confidence routing to anything other than a plain question is
     # exactly the failure mode that caused the search_files/remember_fact
@@ -1184,50 +1086,189 @@ def execute(decision: dict) -> str:
         return answer_general_question(original_input, domain)
 
     if func_name is None:
-        return answer_general_question(original_input, domain)
-
-    if func_name == "remember_fact":
-        fact_text = decision.get("_original_input", "")
-        canonical_facts = canonicalize_fact(fact_text)
-        if not canonical_facts:
-            # Router likely misclassified a question/non-fact as remember_fact.
-            # Don't store garbage — fall back to answering it as a question instead.
-            log.info("remember_fact_fallback_to_qa", extra={"original_input": fact_text})
-            return answer_general_question(fact_text, domain)
-        for c_fact in canonical_facts:
-            memory.store(c_fact, domain=domain, content_type="fact")
-            log.info("fact_remembered", extra={"domain": domain, "text": c_fact})
-
-        # Execution verified: facts canonicalized and stored
-        if decision.get("via_llm"):
-            classifier.add_utterance_dynamically(original_input, "remember_fact")
-
-        return _acknowledge_fact(fact_text)
-
-    if func_name == "correct_fact":
-        return _handle_correction(decision.get("_original_input", ""), domain)
-
-    if func_name == "system_inspect":
-        return _handle_system_inspect(decision.get("_original_input", ""), domain)
-
-    if func_name == "research_task":
-        return _handle_research(decision, domain)
-
-    if func_name == "web_task":
-        return _handle_web_task(decision)
-
-    if func_name == "academic_tracking":
-        return _handle_academic_tracking(decision)
-
-    if func_name == "unsupported":
-        reason = decision.get("reason", "this request")
-        log.info("unsupported_capability_requested", extra={"reason": reason,
-                                                               "user_input": decision.get("_original_input", "")})
-        return f"That capability ({reason}) isn't built yet — it's on the roadmap and still in progress."
-
-    if func_name == "mcp_tool" or (func_name and func_name.startswith("mcp_")):
+        capability = capabilities.CAPABILITIES[capabilities.DEFAULT_INTENT]
+    elif capability is None and func_name.startswith("mcp_"):  # a qualified MCP tool name
         return _execute_mcp_tool(decision)
 
+    if capability is None:
+        log.info("execution_blocked_not_in_allowlist", extra={"attempted_function": func_name})
+        return f"Blocked: '{func_name}' is not an allowed function."
+
+    return _capability_handler(capability)(decision, domain)
+
+
+def _capability_handler(capability: "capabilities.Capability"):
+    """Looked up at call time, so tests can patch a handler by name."""
+    return globals()[capability.handler]
+
+
+# ── Capability handlers: (decision, domain) -> reply ─────────────────────────
+
+def _run_general_question(decision: dict, domain: str) -> str:
+    return answer_general_question(decision.get("_original_input", ""), domain)
+
+
+def _run_coding_task(decision: dict, domain: str) -> str:
+    original_input = decision.get("_original_input", "")
+    # ── Checkpoint 1: Tier gate ──────────────────────────────────────
+    coding_gate = gate("coding_task", {}, user_input=original_input)
+    if coding_gate["action"] == "blocked":
+        return coding_gate["message"]
+    if coding_gate["action"] == "confirm":
+        print(coding_gate["message"])
+        if input("> ").strip().lower() != "y":
+            log.info("coding_task_confirmation_denied", extra={})
+            return "Cancelled."
+        log.info("coding_task_confirmation_granted", extra={})
+
+    # ── Checkpoint 2: Plan approval ──────────────────────────────────
+    plan = CODING_SPECIALIST.plan_task(original_input)
+    print("\n" + "=" * 60)
+    print("📋 CODING PLAN")
+    print("=" * 60)
+    print(f"Goal: {plan.get('goal', 'N/A')}")
+    print("\nSteps:")
+    for i, step in enumerate(plan.get('steps', []), 1):
+        print(f"  {i}. {step}")
+    if plan.get('files_to_create'):
+        print(f"\nNew files: {', '.join(plan['files_to_create'])}")
+    if plan.get('files_to_modify'):
+        print(f"Modify: {', '.join(plan['files_to_modify'])}")
+    if plan.get('risks'):
+        print(f"\n⚠️  Risks: {', '.join(plan['risks'])}")
+    print(f"\nConstraints: {', '.join(plan.get('constraints', []))}")
+    print("=" * 60)
+    print("Approve this plan? (y/n)")
+    if input("> ").strip().lower() != "y":
+        log.info("coding_plan_rejected", extra={"goal": plan.get("goal", "")})
+        return "Plan rejected. No code was generated or modified."
+    log.info("coding_plan_approved", extra={"goal": plan.get("goal", "")})
+
+    # Execution verified: plan approved by user
+    if decision.get("via_llm"):
+        classifier.add_utterance_dynamically(original_input, "coding_task")
+
+    # Register the approved plan with the watchdog so any write to a file
+    # the user never approved is caught before it reaches the apply prompt.
+    plan_id = WATCHDOG.register_plan(
+        goal=plan.get("goal", original_input),
+        allowed_actions=_declared_write_targets(plan),
+        steps=plan.get("steps", []),
+    )
+
+    # ── Execute: patch → test → verify ───────────────────────────────
+    # The approved plan is passed back in so code is generated against the
+    # plan the user actually saw, not a regenerated one.
+    result = CODING_SPECIALIST.implement_and_verify(original_input, plan=plan)
+    log.info("coding_task_verified", extra={
+        "status": result["status"],
+        "attempts": result["attempts"],
+    })
+
+    # Show result summary
+    summary = format_coding_result(result)
+    print(summary)
+
+    # ── Watchdog: does the patch target a file the plan declared? ────
+    target_file = (result.get("patch") or {}).get("target_file", "")
+    if target_file:
+        verdict = WATCHDOG.observe(
+            plan_id, f"write:{target_file}", {"target_file": target_file}, tier=2,
+        )
+        if not verdict.allowed:
+            log.info("coding_patch_blocked_by_watchdog", extra={
+                "target_file": target_file, "reason": verdict.reason,
+            })
+            return (
+                f"{summary}\n\n⛔ Watchdog blocked this patch: {verdict.reason}\n"
+                "Nothing was written. Re-run the request if you want this file included in the plan."
+            )
+
+    # ── Checkpoint 3: File application approval ──────────────────────
+    if result["status"] in ("passed", "unverified") and result.get("patch"):
+        review = result.get("review", {})
+        review_note = ""
+        if review.get("approved"):
+            review_note = f" (LLM reviewer approved: {review.get('summary', '')})"
+        elif review:
+            review_note = f" (LLM reviewer flagged issues: {', '.join(review.get('issues', []))})"
+
+        print(f"\n{'=' * 60}")
+        print(f"💾 APPLY CHANGES?{review_note}")
+        print(f"Target: {result['patch'].get('target_file', 'N/A')}")
+        print(f"{'=' * 60}")
+        print("Write this code to the file? (y/n)")
+        if input("> ").strip().lower() == "y":
+            apply_result = CODING_SPECIALIST.apply_patch(result["patch"])
+            if apply_result["applied"]:
+                backup_note = f" Backup at: {apply_result['backup']}" if apply_result.get("backup") else ""
+                log.info("coding_patch_applied", extra=apply_result)
+                return f"{summary}\n\n✅ Changes applied to {apply_result['file']} ({apply_result['lines_written']} lines).{backup_note}"
+            else:
+                log.info("coding_patch_apply_failed", extra=apply_result)
+                return f"{summary}\n\n❌ Failed to apply changes: {apply_result.get('error', 'unknown')}"
+        else:
+            log.info("coding_patch_application_declined", extra={})
+            return f"{summary}\n\nChanges NOT applied (code was generated but not written to disk)."
+
+    return summary
+
+
+def _run_remember_fact(decision: dict, domain: str) -> str:
+    original_input = decision.get("_original_input", "")
+    fact_text = decision.get("_original_input", "")
+    canonical_facts = canonicalize_fact(fact_text)
+    if not canonical_facts:
+        # Router likely misclassified a question/non-fact as remember_fact.
+        # Don't store garbage — fall back to answering it as a question instead.
+        log.info("remember_fact_fallback_to_qa", extra={"original_input": fact_text})
+        return answer_general_question(fact_text, domain)
+    for c_fact in canonical_facts:
+        memory.store(c_fact, domain=domain, content_type="fact")
+        log.info("fact_remembered", extra={"domain": domain, "text": c_fact})
+
+    # Execution verified: facts canonicalized and stored
+    if decision.get("via_llm"):
+        classifier.add_utterance_dynamically(original_input, "remember_fact")
+
+    return _acknowledge_fact(fact_text)
+
+
+def _run_correct_fact(decision: dict, domain: str) -> str:
+    return _handle_correction(decision.get("_original_input", ""), domain)
+
+
+def _run_system_inspect(decision: dict, domain: str) -> str:
+    return _handle_system_inspect(decision.get("_original_input", ""), domain)
+
+
+def _run_research_task(decision: dict, domain: str) -> str:
+    return _handle_research(decision, domain)
+
+
+def _run_web_task(decision: dict, domain: str) -> str:
+    return _handle_web_task(decision)
+
+
+def _run_academic_tracking(decision: dict, domain: str) -> str:
+    return _handle_academic_tracking(decision)
+
+
+def _run_unsupported(decision: dict, domain: str) -> str:
+    reason = decision.get("reason", "this request")
+    log.info("unsupported_capability_requested", extra={"reason": reason,
+                                                           "user_input": decision.get("_original_input", "")})
+    return f"That capability ({reason}) isn't built yet — it's on the roadmap and still in progress."
+
+
+def _run_mcp_tool(decision: dict, domain: str) -> str:
+    return _execute_mcp_tool(decision)
+
+
+def _run_native_function(decision: dict, domain: str) -> str:
+    """A system_agent function: allowlist, argument coercion, tier gate, run."""
+    func_name = decision.get("function")
+    original_input = decision.get("_original_input", "")
     if func_name not in AVAILABLE_FUNCTIONS:
         log.info("execution_blocked_not_in_allowlist", extra={"attempted_function": func_name})
         return f"Blocked: '{func_name}' is not an allowed function."
@@ -1541,13 +1582,28 @@ def _handle_turn(user_input: str) -> str:
     return _handle_single(user_input)
 
 
+def _check_capability_handlers() -> None:
+    """Every capability must name a handler defined here; fail at import, not
+    when a user first asks for it."""
+    for capability in capabilities.CAPABILITIES.values():
+        if not callable(globals().get(capability.handler)):
+            raise capabilities.CapabilityError(
+                f"capabilities/{capability.name}.yaml: handler {capability.handler!r} is not defined in orchestrator.py")
+
+
+_check_capability_handlers()
+
+
 if __name__ == "__main__":
     print("=== Zedek Orchestrator (Phase 6: tier gate + tiered memory active) — interactive test ===")
     print("Try things like: 'how much free space do I have', 'what's using the most memory', 'find my resume file'")
-    print("Type 'quit' to exit.\n")
+    print("Type 'help' to see what I can do, 'quit' to exit.\n")
 
     while True:
         user_input = input("You: ").strip()
+        if user_input.lower() in ("help", "/help", "?"):
+            print(capabilities.help_text() + "\n")
+            continue
         if user_input.lower() in ("quit", "exit"):
             print("Ending session — reviewing what's worth remembering long-term...")
             summarize_and_flush_session()

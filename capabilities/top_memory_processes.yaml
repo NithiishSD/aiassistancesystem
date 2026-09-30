@@ -1,4 +1,6 @@
 name: top_memory_processes
+summary: Show the programs using the most memory.
+handler: _run_native_function
 description: >-
   User wants to see which running processes or applications are using the most RAM / memory. Examples:
   'show memory hogs', 'what is eating my RAM', 'list top RAM-consuming processes'.

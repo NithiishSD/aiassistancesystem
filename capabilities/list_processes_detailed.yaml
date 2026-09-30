@@ -1,4 +1,6 @@
 name: list_processes_detailed
+summary: Explain what running processes are doing (CPU, threads, details).
+handler: _run_native_function
 description: >-
   User wants detailed information about one or more specific running processes, such as CPU usage, runtime,
   or threads — not just a top-N memory list. Examples: 'why is PID 4052 using so much CPU', 'inspect this

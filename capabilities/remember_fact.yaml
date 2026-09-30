@@ -1,4 +1,6 @@
 name: remember_fact
+summary: Remember a fact about you for later.
+handler: _run_remember_fact
 description: >-
   User wants Zedek to remember, store, or note a personal or academic fact about themselves. Examples:
   'remember I study at PSG College', 'note my reg number is 21BCE001', 'save that my target company is

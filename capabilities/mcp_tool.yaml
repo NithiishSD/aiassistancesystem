@@ -1,4 +1,6 @@
 name: mcp_tool
+summary: "Use connected tools: weather, news, GitHub, Codeforces, and more."
+handler: _run_mcp_tool
 description: >-
   User wants to invoke an external MCP-connected tool or service: fetch the current time or date, count
   words in text, summarize text, run a web search, query a database, or use any capability provided by

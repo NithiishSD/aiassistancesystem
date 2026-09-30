@@ -2,6 +2,8 @@
 # Product names ("firefox") dominate MiniLM embeddings; on DEV this raised local
 # precision 94.4% -> 96.2% for -0.5 points of coverage.
 name: open_application
+summary: Open an installed desktop application.
+handler: _run_native_function
 description: >-
   User wants to launch, open, or start a specific pre-installed desktop application or program already
   on their system (e.g. calculator, browser, text editor, terminal). NOT for asking questions about what

@@ -1,4 +1,6 @@
 name: correct_fact
+summary: Correct or update something I remembered about you.
+handler: _run_correct_fact
 description: >-
   User wants to update, correct, negate, or retract/delete a previously stored fact that is wrong, mistaken,
   or outdated. Examples: 'that college info is wrong, update it', 'no its not correct', 'no you mistook

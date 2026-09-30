@@ -1,6 +1,8 @@
 # threshold 0.65, not the 0.55 default: a wrong match refuses the request outright
 # (same DEV measurement as open_application).
 name: unsupported
+summary: Recognize requests I can't do yet (media control, closing apps, ...).
+handler: _run_unsupported
 description: >-
   User is asking for an action that Zedek does not support: media/music control, IoT or smart-home control,
   sending messages, booking services, adjusting hardware settings like brightness or volume, or closing/quitting

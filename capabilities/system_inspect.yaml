@@ -1,4 +1,6 @@
 name: system_inspect
+summary: Answer questions about this system (installed software, kernel, hardware) with read-only commands.
+handler: _run_system_inspect
 description: >-
   User wants to inspect, query, or check system metrics, hardware specs, installed packages or applications
   count, OS version, kernel release, battery status, CPU/GPU info, network IP, uptime, or system environment.

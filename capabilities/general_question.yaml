@@ -2,6 +2,8 @@
 # share an action's vocabulary ("explain what ram is") route here and escalate to the
 # LLM instead of being claimed by an action. Never an action itself.
 name: general_question
+summary: Answer general questions, using what I remember about you.
+handler: _run_general_question
 description: >-
   User is asking a general knowledge question, a conversational question, or anything that does not clearly
   match any of the specific system actions above. This is the fallback — only choose it if none of the

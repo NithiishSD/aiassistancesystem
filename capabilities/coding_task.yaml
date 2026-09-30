@@ -1,4 +1,9 @@
 name: coding_task
+summary: Write or change code, with a plan you approve before anything is written.
+handler: _run_coding_task
+# Runs even when the router is unsure: its own tier gate, plan approval and
+# apply approval stand in for router confidence.
+runs_when_unsure: true
 description: >-
   User wants help with a programming, coding, or software development task: building websites, web pages,
   HTML/CSS/JS frontend, creating scripts, writing code, debugging, refactoring, explaining algorithms,

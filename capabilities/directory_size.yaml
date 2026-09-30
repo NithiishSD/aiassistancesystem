@@ -1,4 +1,6 @@
 name: directory_size
+summary: Tell how big a specific folder is.
+handler: _run_native_function
 description: >-
   User wants to know the total size of a specific folder or directory (not a system-wide breakdown). Examples:
   'how big is my downloads folder', 'total size of project dir'.
