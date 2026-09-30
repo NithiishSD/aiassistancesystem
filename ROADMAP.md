@@ -68,7 +68,7 @@ says less. Everything here is about making its outputs trustworthy.*
 - [ ] Optional: `python memory_hygiene.py --apply --drop-conversations` removes 36 raw
       conversation turns persisted before the tiered-memory redesign.
 
-- [ ] **Reject hedged or speculative facts** (found while verifying F1). The store still holds LLM guesses such as
+- [x] **Reject hedged or speculative facts** (found while verifying F1). *Done in OpenSpec `reject-hedged-facts`: hedged values are refused at the gate (`hedged_value`). The dry run finds 2 such rows on the live store; removing them is `python memory_hygiene.py --apply`, left to the owner.* The store still holds LLM guesses such as
       "User's Current Studies: Data Structures (*presumably* a course at PSG…)" and "Operating System: *likely* a
       Linux-based system". The first outranked the real college fact on the live store. Add hedge words (presumably,
       likely, probably, possibly, maybe) to `normalize_fact()`'s rejections and sweep the existing rows.

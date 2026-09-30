@@ -262,3 +262,42 @@ class TestCleanStore:
         rendered = memory_hygiene.format_cleanup_report(report, "personal", dry_run=True)
         assert "Dry run" in rendered
         assert "llm_preamble" in rendered
+
+
+class TestHedgedFacts:
+    """A guess is not a fact (OpenSpec change: reject-hedged-facts)."""
+
+    @pytest.mark.parametrize("text", [
+        "User's Current Studies: Data Structures (presumably a course at Northwind Institute)",
+        "User's Operating System: likely a Linux-based system",
+        "User's city: Probably Rivertown",
+        "User's major: not explicitly stated, maybe computer science",
+        "User's laptop: inferred to be a ThinkPad",
+    ])
+    def test_hedged_value_rejected(self, text):
+        assert memory_hygiene.normalize_fact(text) == (None, "hedged_value")
+
+    @pytest.mark.parametrize("text", [
+        "User's college: Northwind Institute",
+        "User's hobby: Maybelline collecting",
+        "User's favourite word: unlikely",
+        "User's likely graduation year: 2028",  # hedge in the attribute, value is plain
+    ])
+    def test_plain_facts_kept(self, text):
+        assert memory_hygiene.normalize_fact(text) == (text, "ok")
+
+    def test_sweep_reports_without_deleting(self, monkeypatch):
+        import memory
+
+        class Fake:
+            def get(self):
+                return {"ids": ["1", "2"],
+                        "documents": ["User's OS: likely a Linux-based system", "User's name: Alex"],
+                        "metadatas": [{"content_type": "fact"}, {"content_type": "fact"}]}
+
+        deleted = []
+        monkeypatch.setattr(memory, "_get_collection", lambda d: Fake())
+        monkeypatch.setattr(memory, "delete_by_ids", lambda ids, domain="personal": deleted.extend(ids))
+        report = memory_hygiene.clean_store(dry_run=True)
+        assert report.deleted_ids == ["1"] and report.reasons == {"hedged_value": 1}
+        assert deleted == []

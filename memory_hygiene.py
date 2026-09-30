@@ -56,6 +56,14 @@ _FALSE_SUFFIX_RE = re.compile(r":\s*false\s*$", re.IGNORECASE)
 # Template placeholders the correction flow leaked into storage verbatim.
 _PLACEHOLDER_RE = re.compile(r"<\s*(new value|value|attribute|name|.*?)\s*>")
 
+# An LLM's guess, not something the user said ("presumably a course at ...",
+# "likely a Linux-based system"). Matched against the VALUE half only.
+_HEDGE_RE = re.compile(
+    r"\b(presumably|likely|probably|possibly|maybe|perhaps|apparently|"
+    r"not explicitly stated|implied|inferred|assumed)\b",
+    re.IGNORECASE,
+)
+
 MIN_FACT_LENGTH = 5
 MAX_FACT_LENGTH = 500
 
@@ -130,6 +138,8 @@ def normalize_fact(text: str) -> tuple[str | None, str]:
             return None, "empty_value"
         if _NULL_VALUE_RE.match(value):
             return None, "null_value"
+        if _HEDGE_RE.search(value):
+            return None, "hedged_value"
 
     return cleaned, "ok"
 
