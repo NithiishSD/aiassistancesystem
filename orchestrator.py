@@ -949,6 +949,16 @@ def _last_assistant_question() -> str | None:
     return None
 
 
+_PAST_QUESTION_RE = re.compile(
+    r"\b(used to|previously|formerly|before|earlier|originally|at first|back then|ago|old|prior|"
+    r"last (?:year|month|week|semester|term)|in (?:19|20)\d\d|did i|was i|was my|were my|have i changed)\b",
+    re.IGNORECASE)
+
+
+def _day(stamp: float | None) -> str:
+    return datetime.fromtimestamp(stamp).strftime("%d %B %Y") if stamp else "an unknown date"
+
+
 def answer_general_question(user_input: str, domain: str) -> str:
     """
     Handles requests that aren't system-agent function calls. Combines two
@@ -966,6 +976,15 @@ def answer_general_question(user_input: str, domain: str) -> str:
                      if item["text"] not in retrieved_texts]
     long_term_lines = [f"- {item['text']}" for item in relevant_facts + profile_facts]
     long_term_block = "\n".join(long_term_lines) if long_term_lines else "(no relevant long-term facts found)"
+    # A question about the user's past ("where did I live before") also gets the
+    # matching facts that stopped being true, with their dates; ROADMAP A2.
+    past_block = ""
+    if user_profile.refers_to_user(user_input) and _PAST_QUESTION_RE.search(user_input):
+        past_lines = [f"- {item['text']} (true from {_day(item['valid_from'])} until {_day(item['valid_until'])})"
+                      for item in memory.past_facts(user_input, domain=domain)]
+        if past_lines:
+            past_block = ("\nFacts that were true EARLIER and are no longer true (history, with dates):\n"
+                          + "\n".join(past_lines) + "\n")
 
     previous_question = _last_assistant_question()
     turn_structure_note = ""
@@ -987,7 +1006,7 @@ do not merge them into one confused statement.
     earlier_note = f"\nEarlier in this conversation (summary): {SESSION_SUMMARY}\n" if SESSION_SUMMARY else ""
     messages.append({"role": "user", "content": f"""Long-term facts relevant to this message:
 {long_term_block}
-{earlier_note}{turn_structure_note}
+{past_block}{earlier_note}{turn_structure_note}
 User's message: {user_input}"""})
 
     sink = _REPLY_STREAM.get()
@@ -1353,15 +1372,24 @@ def _run_remember_fact(decision: RoutingDecision, domain: str) -> str:
         # Don't store garbage — fall back to answering it as a question instead.
         log.info("remember_fact_fallback_to_qa", extra={"original_input": fact_text})
         return answer_general_question(fact_text, domain)
+    replaced: list[str] = []
     for c_fact in canonical_facts:
-        memory.store(c_fact, domain=domain, content_type="fact")
-        log.info("fact_remembered", extra={"domain": domain, "text": c_fact})
+        # A new value for something that holds one value at a time (name,
+        # college, where the user lives) supersedes the old one; ROADMAP A2.
+        outcome = memory.remember(c_fact, domain=domain)
+        replaced += [f'"{old["text"]}" ➔ "{c_fact}"' for old in outcome["superseded"]]
+        log.info("fact_remembered", extra={"domain": domain, "text": c_fact,
+                                           "superseded": len(outcome["superseded"]),
+                                           "already_known": outcome["duplicate"]})
 
     # Execution verified: facts canonicalized and stored
     if decision.via_llm:
         classifier.add_utterance_dynamically(original_input, "remember_fact")
 
-    return _acknowledge_fact(fact_text)
+    reply = _acknowledge_fact(fact_text)
+    if replaced:
+        reply += "\n(This replaces what I had: " + "; ".join(replaced) + ". The old value is kept as history.)"
+    return reply
 
 
 def _run_correct_fact(decision: RoutingDecision, domain: str) -> str:

@@ -21,6 +21,7 @@ import time
 import chromadb
 from chromadb.config import Settings
 from semantic_router.encoders import HuggingFaceEncoder
+import fact_attributes
 import memory_hygiene
 from zedek_logger import get_logger
 
@@ -384,6 +385,63 @@ def invalidate(ids: list[str], domain: str = "personal", user_id: str = DEFAULT_
     return changed
 
 
+def remember(text: str, domain: str = "personal", user_id: str = DEFAULT_USER_ID) -> dict:
+    """Stores a fact the user stated, superseding what it replaces (ROADMAP A2).
+
+    For an attribute that holds one value at a time (fact_attributes), current
+    facts with a different value are marked no longer valid and point at the
+    new fact; a fact with the same value is not stored twice. Any other fact is
+    simply stored. Returns {"id", "superseded": [old facts], "duplicate": bool};
+    "id" is "" when hygiene rejected the fact, and then nothing is superseded.
+    """
+    normalized, _reason = memory_hygiene.normalize_fact(text)
+    key = fact_attributes.single_valued_key(normalized) if normalized else None
+    if key is None:
+        return {"id": store(text, domain=domain, content_type="fact", user_id=user_id),
+                "superseded": [], "duplicate": False}
+
+    same_attribute = [fact for fact in current_facts(domain, user_id)
+                      if fact_attributes.single_valued_key(fact["text"]) == key]
+    new_value = fact_attributes.value_key(normalized)
+    for fact in same_attribute:
+        if fact_attributes.value_key(fact["text"]) == new_value:
+            log.info("memory_fact_already_known", extra={"domain": domain, "attribute": key})
+            return {"id": fact["id"], "superseded": [], "duplicate": True}
+
+    # Store first: a fact that cannot be stored must not cost the old one.
+    new_id = store(text, domain=domain, content_type="fact", user_id=user_id)
+    if not new_id:
+        return {"id": "", "superseded": [], "duplicate": False}
+    if same_attribute:
+        invalidate([fact["id"] for fact in same_attribute], domain=domain, user_id=user_id, superseded_by=new_id)
+        log.info("memory_fact_superseded", extra={"domain": domain, "attribute": key,
+                                                  "replaced": len(same_attribute)})
+    return {"id": new_id, "superseded": same_attribute, "duplicate": False}
+
+
+def conflicts(domain: str = "personal", user_id: str = DEFAULT_USER_ID) -> dict[str, list[dict]]:
+    """Single-valued attributes that currently hold more than one value, e.g.
+    two places of residence stored before superseding existed. Read-only."""
+    groups: dict[str, list[dict]] = {}
+    for fact in current_facts(domain, user_id):
+        key = fact_attributes.single_valued_key(fact["text"])
+        if key is not None:
+            groups.setdefault(key, []).append(fact)
+    return {key: facts for key, facts in groups.items()
+            if len({fact_attributes.value_key(f["text"]) for f in facts}) > 1}
+
+
+def format_conflicts(groups: dict[str, list[dict]]) -> str:
+    if not groups:
+        return "No single-valued attribute holds more than one current value."
+    lines = []
+    for key, facts in groups.items():
+        lines.append(f"{key}: {len(facts)} current values (oldest first)")
+        lines += [f"  - {fact['text']}" for fact in facts]
+    lines.append("\nTell Zedek which one is right (\"actually, my <attribute> is ...\") and the others become history.")
+    return "\n".join(lines)
+
+
 def current_facts(domain: str = "personal", user_id: str = DEFAULT_USER_ID) -> list[dict]:
     """Every fact still valid in a domain, oldest first (no search, no ranking)."""
     _validate_domain(domain)
@@ -406,6 +464,26 @@ def history(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_ID
         item["status"] = ("current" if not meta.get("invalidated")
                           else "superseded" if meta.get("superseded_by") else "retracted")
     return items
+
+
+PAST_FACT_LIMIT = 4
+
+
+def past_facts(query: str, domain: str = "personal", user_id: str = DEFAULT_USER_ID,
+               limit: int = PAST_FACT_LIMIT) -> list[dict]:
+    """Facts matching `query` that are no longer valid, closest first, each
+    with "valid_from" and "valid_until" timestamps. Rows further away than the
+    fallback distance are left out, so an unrelated old fact is not offered."""
+    items = history(_third_person_query(query), domain=domain, user_id=user_id, top_k=DEFAULT_CANDIDATE_K)
+    past = []
+    for item in items:
+        meta = item["metadata"] or {}
+        if item["status"] == "current" or item.get("distance", 0.0) > FALLBACK_MAX_DISTANCE:
+            continue
+        past.append({"text": item["text"], "id": item["id"], "status": item["status"],
+                     "valid_from": meta.get("valid_at") or meta.get("timestamp"),
+                     "valid_until": meta.get("invalid_at")})
+    return past[:limit]
 
 
 def format_history(items: list[dict]) -> str:
@@ -451,6 +529,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Zedek memory tools")
     parser.add_argument("--history", metavar="QUERY",
                         help="list matching facts, including superseded and retracted ones (read-only)")
+    parser.add_argument("--conflicts", action="store_true",
+                        help="list single-valued attributes holding more than one current value (read-only)")
     parser.add_argument("--domain", default="personal", choices=sorted(ALLOWED_DOMAINS))
     parser.add_argument("--self-test", action="store_true",
                         help="store three sample rows and query them (writes to the store)")
@@ -458,6 +538,8 @@ if __name__ == "__main__":
 
     if args.history:
         print(format_history(history(args.history, domain=args.domain)))
+    elif args.conflicts:
+        print(format_conflicts(conflicts(domain=args.domain)))
     elif args.self_test:
         _self_test()
     else:
