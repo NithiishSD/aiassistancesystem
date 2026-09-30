@@ -97,7 +97,7 @@ remember/correct fact, detailed-process, and research. It found a production bug
 as substrings, so "type…", "…capacity…", "facebook", and "book…" never reach Layer 1 or the LLM. Next change fixes it.*
 *Also fixed: `requirements.txt` could not be installed from scratch (numpy pin vs semantic-router's stale numpy<2 cap).*
 *Acknowledgement-guard fix (OpenSpec `fix-acknowledgement-guard`): one whole-word check shared by the orchestrator and the classifier. The orchestrator had its own buggy copy that the eval could not see. End to end, **7/9 formerly swallowed requests now route correctly (was 0/9)**. Offline, only `general_question` precision moves (0.917 → 1.000), because the gated eval scores "sent to the LLM" the same as "dropped".*
-- [ ] Follow-up: tests rewrite the real `data/dynamic_utterances.json` (importing `orchestrator` runs `register_mcp_tools()`). The contents are idempotent, but tests must not write user data.
+- [x] Follow-up: tests rewrite the real `data/dynamic_utterances.json` (importing `orchestrator` runs `register_mcp_tools()`). The contents are idempotent, but tests must not write user data. *Fixed in `self-correcting-routing`: `ZEDEK_DYNAMIC_UTTERANCES_PATH`, set to a temp file by `tests/conftest.py`.*
 - [x] Follow-up: "port" in `AMBIGUOUS_TERMS` makes "port this javascript to typescript" stop for a clarifying question. *Fixed by OpenSpec `fix-ambiguity-guard`: the guard hit **37/384 golden requests (9.6%)**, not just this one; it now asks only when the term is the bare topic. Golden false positives: 0 (dev and test).*
 *Layer-1 coverage (OpenSpec `improve-layer1-coverage`), researched and then measured on the held-out test slice: short example phrases, a general-question anchor, and threshold 0.55 (0.65 for the two intents whose mistakes cause actions). **Accuracy 0.29 → 0.56. LLM escalation 76% → 48%.** Local precision is 96.9%, and 0 of 11 general questions are claimed. Two read-only precision dips are accepted and documented. It also fixed 4 golden test rows that were near-copies of router phrases, and added a permanent near-duplicate guard.*
 - [ ] Next coverage lever, if needed: a calibrated classifier over the same embeddings (research-ranked #4). Only if phrase coverage plateaus.
@@ -111,7 +111,7 @@ collapses as tool count grows.
       **confusion matrix is the primary artifact** — aggregate accuracy hides exactly the
       class-level failures that matter.
 - [ ] CI gate: fail if any class drops >2 points precision against baseline.
-- [ ] Promote real misroutes into the set as they happen (~10 min/week).
+- [ ] Promote real misroutes into the set as they happen (~10 min/week). *Corrected misroutes are now logged to `data/misroutes.jsonl` (gitignored) by `self-correcting-routing`; promoting them is still by hand.*
 - [ ] **"Must stay local" list.** Utterances the classifier must never send to the LLM
       fallback. Home Assistant shipped a regression (issue #139415) that sent every
       command to the LLM. A test list like this would have caught it.
@@ -319,7 +319,7 @@ capability as a folder containing a `SKILL.md` with a small metadata header:
 Replace the free-form `dict` flowing through `route_request → execute` with a dataclass.
 This is the one genuinely useful idea to borrow from LangGraph — as a pattern, not a dependency.
 *Shipped as OpenSpec change `typed-routing-decision`: `routing_decision.RoutingDecision` replaces the dict; ~25 `.get(key, default)` reads became attributes, and an unknown key now raises instead of silently defaulting.*
-- [ ] **Owner decision (found during E2):** `_handle_correction`'s self-heal is meant to un-learn the phrase from the *previous* misrouted turn, but `LAST_ROUTING_DECISION` already holds the *current* correction turn, so it never fires on the earlier one. Fixing it naively would delete correctly learned phrases whenever a fact is corrected ("i live in X" → "that's outdated"). Options: remove the self-heal, or un-learn only when the user says the *routing* was wrong.
+- [x] **Owner decision (found during E2), resolved by OpenSpec `self-correcting-routing`:** a correction is now diagnosed as a wrong fact (memory is fixed) or a wrong route (after the user confirms: un-learn, log, redo through the gate, learn the right phrase). Original note: `_handle_correction`'s self-heal is meant to un-learn the phrase from the *previous* misrouted turn, but `LAST_ROUTING_DECISION` already holds the *current* correction turn, so it never fires on the earlier one. Fixing it naively would delete correctly learned phrases whenever a fact is corrected ("i live in X" → "that's outdated"). Options: remove the self-heal, or un-learn only when the user says the *routing* was wrong.
 
 ---
 

@@ -31,3 +31,6 @@ data/llm_cache.sqlite3
 
 # Pinned MCP tool definitions (per machine; trust on first use)
 data/mcp_tool_lock.json
+
+# Misroutes the owner corrected (user utterances; promote into evals by hand)
+data/misroutes.jsonl

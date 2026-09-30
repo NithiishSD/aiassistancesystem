@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from contextvars import ContextVar
 from text_sanitizer import model_facing_description
 from zedek_logger import get_logger, trace_context
@@ -85,6 +86,24 @@ Determine which candidate fact (if any) this statement contradicts, negates, or 
 
 Respond with "index" (the number of one listed candidate, or null) and "corrected_fact"
 ("User's <attribute>: <new value>", or null)."""
+
+# Built once from the capability registry, so it is byte-identical on every call.
+_CORRECTION_DIAGNOSIS_SYSTEM = (
+    "The user is reacting to what an assistant just did with their previous request. "
+    "Decide what went wrong.\n"
+    '- "fact": a detail about the user that the assistant stored or recalled is wrong or '
+    'outdated (e.g. "no, my exam is on tuesday").\n'
+    '- "routing": the assistant did the wrong KIND of thing with the previous request; the '
+    "user wanted a different action, or just an answer (e.g. \"I didn't ask you to open an "
+    'app, I asked which apps I have").\n'
+    '- "other": neither. If the message asks for something NEW instead of saying the previous '
+    'request was misunderstood, it is "other" (e.g. "thanks, now find my notes folder").\n'
+    'Choose "routing" only when the user says the previous request itself was handled as the '
+    "wrong kind of thing.\n"
+    'For "routing", set "intended_intent" to the capability the previous request should have '
+    'used, or null if it is unclear. Otherwise set it to null.\n\nCapabilities:\n'
+    + "\n".join(f"- {n}: {capabilities.CAPABILITIES[n].summary}" for n in capabilities.LLM_TOOL_ORDER)
+)
 
 _ACKNOWLEDGE_SYSTEM = """Write a brief (1-2 sentence), warm, natural acknowledgment of what the user
 just told you about themselves. You may ask a short, relevant follow-up question if it
@@ -168,6 +187,11 @@ def _declared_write_targets(plan: dict) -> set[str]:
     declared.add(f"write:{default_target}")
     return declared
 LAST_ROUTING_DECISION: RoutingDecision | None = None
+# The last completed turn that was not itself a correction: what a correction
+# refers to. A healed misroute replaces it with the redone decision.
+_PREVIOUS_DECISION: RoutingDecision | None = None
+MISROUTES_PATH = os.getenv("ZEDEK_MISROUTES_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                   "data", "misroutes.jsonl"))
 
 
 def _init_mcp() -> None:
@@ -477,7 +501,16 @@ def generate_ambiguity_reply(user_input: str, previous_input: str | None = None)
 # not Llama. See route_request() below.
 
 
-def route_request(user_input: str) -> RoutingDecision:
+# A complaint about what Zedek DID with the previous request (not about a fact).
+_ROUTING_COMPLAINT = re.compile(
+    r"\b(?:not what i (?:asked|meant|wanted|said)|that'?s not what|you misunderstood|misunderstood me"
+    r"|i did(?:n'?t| not) (?:ask|want|mean)|i (?:meant|wanted|asked for|asked you to)"
+    r"|wrong (?:thing|action|app|application|one|tool|file|folder|command)|why did you (?:open|run|search|do))\b",
+    re.IGNORECASE,
+)
+
+
+def route_request(user_input: str, complaint_guard: bool = True) -> RoutingDecision:
     """
     Phase 6.5: Uses the dedicated classifier (classifier.py) for intent +
     domain, NOT Llama. Llama is only invoked afterward, and only if a real
@@ -493,6 +526,10 @@ def route_request(user_input: str) -> RoutingDecision:
 
     if should_ask_ambiguous_term_question(user_input, [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]):
         return RoutingDecision(None, user_input, domain=classifier.classify_domain(user_input), clarify=True)
+
+    if complaint_guard and _PREVIOUS_DECISION is not None and _ROUTING_COMPLAINT.search(user_input):
+        log.info("routing_complaint_guard", extra={"previous_function": _PREVIOUS_DECISION.function})
+        return RoutingDecision("correct_fact", user_input, domain=_PREVIOUS_DECISION.domain)
 
     intent_result = classifier.classify_intent(user_input)
     domain = classifier.classify_domain(user_input)
@@ -510,21 +547,25 @@ def route_request(user_input: str) -> RoutingDecision:
         via_llm=via_llm,  # True when Layer 2 LLM tool-calling was used
     )
 
-    # Only real functions (not remember_fact/unsupported/None) need argument
-    # extraction — and this is now a narrow, well-defined task for Llama,
-    # not a classification decision.
-    if func_name in AVAILABLE_FUNCTIONS:
-        if func_name == "open_application":
-            decision.args = {"app_name": _extract_application_name(user_input)}
-        else:
-            decision.args = _extract_args(func_name, user_input)
-    elif func_name == "mcp_tool" or (func_name and func_name.startswith("mcp_")):
-        decision.args = _extract_mcp_args(user_input, target_tool_qname=func_name if func_name.startswith("mcp_") else None)
+    decision.args = _args_for(func_name, user_input)
 
     log.info("routing_decision",
              extra={"decision": decision.log_fields(),
                     "via_llm": via_llm})
     return decision
+
+
+def _args_for(func_name: str | None, user_input: str) -> dict:
+    """Only real functions (not remember_fact/unsupported/None) need argument
+    extraction — a narrow, well-defined task for the local model, not a
+    classification decision."""
+    if func_name in AVAILABLE_FUNCTIONS:
+        if func_name == "open_application":
+            return {"app_name": _extract_application_name(user_input)}
+        return _extract_args(func_name, user_input)
+    if func_name == "mcp_tool" or (func_name and func_name.startswith("mcp_")):
+        return _extract_mcp_args(user_input, target_tool_qname=func_name if func_name.startswith("mcp_") else None)
+    return {}
 
 
 def _extract_application_name(user_input: str) -> str:
@@ -737,14 +778,8 @@ def _handle_correction(raw_text: str, domain: str) -> str:
     Handles a fact correction or retraction/deletion.
     Finds candidate stored facts, and either updates the fact with a new value
     or deletes/retracts it if the user indicated it was false or requested removal.
-    Also self-heals by pruning any recently learned dynamic utterance that led to this mistake.
+    (Routing mistakes are diagnosed and healed by _run_correct_fact.)
     """
-    global LAST_ROUTING_DECISION
-    if LAST_ROUTING_DECISION and LAST_ROUTING_DECISION.via_llm:
-        classifier.remove_utterance_dynamically(
-            LAST_ROUTING_DECISION.user_input,
-            LAST_ROUTING_DECISION.function
-        )
     last_q = _last_assistant_question()
     search_query = f"{last_q} {raw_text}".strip() if last_q and len(raw_text.split()) <= 6 else raw_text
     candidates = memory.retrieve(search_query, domain=domain, content_type="fact", top_k=4)
@@ -1234,7 +1269,100 @@ def _run_remember_fact(decision: RoutingDecision, domain: str) -> str:
 
 
 def _run_correct_fact(decision: RoutingDecision, domain: str) -> str:
+    """Work out what the user is correcting: a stored fact (fix memory) or the
+    routing of their previous request (heal the router and redo it)."""
+    previous = _PREVIOUS_DECISION
+    if previous is None:
+        return _handle_correction(decision.user_input, domain)
+
+    kind, intended = _diagnose_correction(previous, decision.user_input)
+    if kind == "routing":
+        return _heal_misroute(previous, intended, decision.user_input)
+    if kind == "other":
+        return _route_normally(decision.user_input)
     return _handle_correction(decision.user_input, domain)
+
+
+def _diagnose_correction(previous: RoutingDecision, correction: str) -> tuple[str, str | None]:
+    """One schema-constrained call. Sees only the user's own messages and
+    capability names, never Zedek's reply (which can carry web content)."""
+    wrong = previous.function or capabilities.DEFAULT_INTENT
+    dynamic = (f'Previous request: "{previous.user_input}"\n'
+               f"The assistant handled it as: {wrong}\n"
+               f'The user now says: "{correction}"')
+    try:
+        result = llm_provider.generate_structured(
+            _static_first(_CORRECTION_DIAGNOSIS_SYSTEM, dynamic),
+            llm_schemas.correction_verdict_model(), task="fact_handling",
+        )
+    except llm_provider.StructuredOutputError as error:
+        log.info("correction_diagnosis_failed", extra={"error": str(error)})
+        return "fact", None  # the pre-existing behavior
+    verdict = result["data"]
+    log.info("correction_diagnosed", extra={"kind": verdict.kind, "intended": verdict.intended_intent,
+                                            "previous_function": wrong})
+    return verdict.kind, verdict.intended_intent
+
+
+def _record_misroute(previous: RoutingDecision, intended: str | None) -> None:
+    """Append to the local misroute log (gitignored) for promotion into the golden set."""
+    entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+             "utterance": previous.user_input, "routed_to": previous.function or capabilities.DEFAULT_INTENT,
+             "intended": intended, "via_llm": previous.via_llm}
+    try:
+        os.makedirs(os.path.dirname(MISROUTES_PATH), exist_ok=True)
+        with open(MISROUTES_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as error:
+        log.info("misroute_log_failed", extra={"error": str(error)})
+
+
+def _heal_misroute(previous: RoutingDecision, intended: str | None, correction: str) -> str:
+    """The diagnosis only proposes: the user confirms before anything is
+    un-learned, logged or redone (agents never self-approve). On yes, un-learn
+    the wrong route, log it, and redo the request as the intended capability
+    through execute(), so every gate and confirmation applies. The redo carries
+    via_llm=True, so the handler's execution-verified learning stores the
+    phrase under the right capability only if the redo succeeds."""
+    global _PREVIOUS_DECISION
+    wrong = previous.function or capabilities.DEFAULT_INTENT
+    if intended is None or intended == wrong or intended == "correct_fact":
+        log.info("misroute_intent_unclear", extra={"previous_function": wrong, "intended": intended})
+        return (f"Sorry, I got that wrong. What did you want me to do with \"{previous.user_input}\"? "
+                "(Type 'help' to see what I can do.)")
+
+    summary = capabilities.CAPABILITIES[intended].summary.rstrip(".")
+    if not _interactive_confirm(f"Did I misunderstand \"{previous.user_input}\"? "
+                                f"Redo it as: {summary.lower()}? (y/n)"):
+        log.info("misroute_heal_declined", extra={"from": wrong, "to": intended})
+        return _route_normally(correction)
+
+    if wrong in capabilities.CAPABILITIES:
+        classifier.remove_utterance_dynamically(previous.user_input, wrong)
+    classifier.forget_routing(previous.user_input)
+    _record_misroute(previous, intended)
+    log.info("misroute_healing", extra={"from": wrong, "to": intended})
+    redo = RoutingDecision(
+        None if intended == capabilities.DEFAULT_INTENT else intended,
+        previous.user_input, domain=previous.domain, via_llm=True,
+        args=_args_for(intended, previous.user_input),
+    )
+    _PREVIOUS_DECISION = redo
+    answer = execute(redo)
+    if intended == capabilities.DEFAULT_INTENT:
+        # Answering always "succeeds"; the user confirmed it was just a question.
+        classifier.add_utterance_dynamically(previous.user_input, intended, user_confirmed=True)
+    return f"Sorry, my mistake. Redoing that as: {summary.lower()}.\n\n{answer}"
+
+
+def _route_normally(text: str) -> str:
+    """Not a correction after all: route and run the message as a new request."""
+    global _PREVIOUS_DECISION
+    decision = route_request(text, complaint_guard=False)
+    if decision.function == "correct_fact":
+        return _handle_correction(text, decision.domain)
+    _PREVIOUS_DECISION = decision
+    return execute(decision)
 
 
 def _run_system_inspect(decision: RoutingDecision, domain: str) -> str:
@@ -1440,12 +1568,14 @@ def _handle_single(user_input: str) -> str:
     planner (Roadmap Item 9) can run it once per decomposed sub-request
     without duplicating the routing/session-logging logic.
     """
-    global LAST_ROUTING_DECISION
+    global LAST_ROUTING_DECISION, _PREVIOUS_DECISION
     decision = route_request(user_input)
     LAST_ROUTING_DECISION = decision
     domain = decision.domain
 
     answer = execute(decision)
+    if decision.function != "correct_fact":
+        _PREVIOUS_DECISION = decision
 
     # Short-term session context only — nothing written to disk per-turn.
     # Long-term storage happens via summarize_and_flush_session(), not here.

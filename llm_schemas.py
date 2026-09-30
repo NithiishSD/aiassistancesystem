@@ -62,6 +62,21 @@ def intent_choice_model() -> type[BaseModel]:
     )
 
 
+@lru_cache(maxsize=1)
+def correction_verdict_model() -> type[BaseModel]:
+    """What went wrong when the user corrects Zedek: a stored fact, the routing
+    of the previous request (and which capability was meant), or neither."""
+    from classifier_tools import VALID_INTENT_NAMES
+
+    names = tuple(sorted(VALID_INTENT_NAMES))
+    return create_model(
+        "CorrectionVerdict",
+        __config__=ConfigDict(extra="forbid"),
+        kind=(Literal["fact", "routing", "other"], ...),
+        intended_intent=(Literal[names] | None, ...),
+    )
+
+
 def _inline(node: Any, defs: dict[str, Any]) -> Any:
     if isinstance(node, dict):
         ref = node.get("$ref")

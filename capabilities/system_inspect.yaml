@@ -1,5 +1,5 @@
 name: system_inspect
-summary: Answer questions about this system (installed software, kernel, hardware) with read-only commands.
+summary: Answer questions about this system (which apps and software are installed, kernel, hardware) with read-only commands.
 handler: _run_system_inspect
 description: >-
   User wants to inspect, query, or check system metrics, hardware specs, installed packages or applications

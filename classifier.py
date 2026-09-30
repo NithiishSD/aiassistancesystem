@@ -41,7 +41,8 @@ MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # Path for dynamically learned utterances (created at runtime on first save).
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DYNAMIC_UTTERANCES_PATH = os.path.join(_PROJECT_ROOT, "data", "dynamic_utterances.json")
+DYNAMIC_UTTERANCES_PATH = os.getenv(
+    "ZEDEK_DYNAMIC_UTTERANCES_PATH", os.path.join(_PROJECT_ROOT, "data", "dynamic_utterances.json"))
 
 # Maximum word count for a prompt to be eligible for dynamic saving.
 # Longer prompts are multi-sentence narratives and would pollute the local
@@ -65,6 +66,11 @@ DOMAIN_ROUTE_THRESHOLD = 0.65
 # mentions into these routes; on DEV this raised local precision 94.4% -> 96.2%
 # for -0.5 points of coverage.
 STRICT_INTENT_THRESHOLDS = capabilities.strict_thresholds()  # `threshold:` in capabilities/*.yaml
+
+# Requests the user confirmed were "just a question" after a misroute
+# (orchestrator._heal_misroute). An exact repeat is answered directly: neither
+# the router nor the LLM gets to turn it into an action again.
+_CONFIRMED_QUESTIONS: set[str] = set()
 
 # In-memory LRU fast-path cache for instant repeat classifications (< 1ms)
 _ROUTING_CACHE: dict[str, dict] = {}
@@ -231,11 +237,20 @@ def _build_intent_router(include_dynamic: bool = True) -> RouteLayer:
     file also holds MCP-registered tool descriptions and differs per machine,
     so the routing evaluation uses the static build to stay reproducible.
     """
+    global _CONFIRMED_QUESTIONS
     dynamic = _load_dynamic_utterances() if include_dynamic else {}
+    if include_dynamic:
+        _CONFIRMED_QUESTIONS = {p.strip().lower() for p in dynamic.get(DEFAULT_INTENT, [])}
     merged: dict[str, list[str]] = {
         name: list(phrases) for name, phrases in INTENT_UTTERANCES.items()
     }
+    anchor = list(GENERAL_ANCHOR_UTTERANCES)
+    for phrase in dynamic.get(DEFAULT_INTENT, []):  # user-confirmed "just a question" phrases
+        if phrase not in anchor:
+            anchor.append(phrase)
     for intent, phrases in dynamic.items():
+        if intent == DEFAULT_INTENT:
+            continue
         if intent in merged:
             # Deduplicate while preserving order: static utterances first
             existing_set = set(merged[intent])
@@ -251,7 +266,7 @@ def _build_intent_router(include_dynamic: bool = True) -> RouteLayer:
               score_threshold=STRICT_INTENT_THRESHOLDS.get(name, ROUTE_THRESHOLD))
         for name, utterances in merged.items()
     ]
-    routes.append(Route(name=DEFAULT_INTENT, utterances=list(GENERAL_ANCHOR_UTTERANCES),
+    routes.append(Route(name=DEFAULT_INTENT, utterances=anchor,
                         score_threshold=ROUTE_THRESHOLD))
     return RouteLayer(encoder=_get_encoder(), routes=routes)
 
@@ -305,6 +320,11 @@ def _is_semantically_valid_for_intent(text: str, intent: str) -> bool:
     return True
 
 
+def forget_routing(text: str) -> None:
+    """Drop a cached routing decision so the next request is classified afresh."""
+    _ROUTING_CACHE.pop((text or "").strip().lower(), None)
+
+
 def remove_utterance_dynamically(text: str, intent: str | None = None) -> bool:
     """Purge a dynamically learned utterance from disk and hot-reload the router.
 
@@ -338,13 +358,14 @@ def remove_utterance_dynamically(text: str, intent: str | None = None) -> bool:
     return removed
 
 
-def add_utterance_dynamically(text: str, intent: str) -> bool:
+def add_utterance_dynamically(text: str, intent: str, *, user_confirmed: bool = False) -> bool:
     """Persist a newly learned phrase and hot-reload the in-memory router.
 
     Quality guardrails
     ------------------
     - Prompts > MAX_DYNAMIC_WORDS words are skipped (narrative / multi-sentence).
-    - ``general_question`` is never persisted.
+    - ``general_question`` is persisted only when the user confirmed it by
+      correcting a misroute (``user_confirmed``); it then joins the anchor route.
     - Semantic intent sanity check (_is_semantically_valid_for_intent) must pass.
     - Duplicates (already in static or dynamic lists) are silently skipped.
 
@@ -355,7 +376,7 @@ def add_utterance_dynamically(text: str, intent: str) -> bool:
     if not text or not intent:
         return False
 
-    if intent == DEFAULT_INTENT:
+    if intent == DEFAULT_INTENT and not user_confirmed:
         log.info("dynamic_learning_skipped_general_question", extra={"text": text})
         return False
 
@@ -371,7 +392,7 @@ def add_utterance_dynamically(text: str, intent: str) -> bool:
         return False
 
     # Check static list first
-    static_phrases = INTENT_UTTERANCES.get(intent, [])
+    static_phrases = GENERAL_ANCHOR_UTTERANCES if intent == DEFAULT_INTENT else INTENT_UTTERANCES.get(intent, [])
     if text in static_phrases:
         log.info("dynamic_learning_skipped_already_static", extra={"text": text, "intent": intent})
         return False
@@ -389,6 +410,7 @@ def add_utterance_dynamically(text: str, intent: str) -> bool:
                                                 "total_for_intent": len(existing)})
 
     # Hot-reload in-memory router so the phrase works immediately
+    forget_routing(text)
     _intent_router = _build_intent_router()
     log.info("intent_router_rebuilt", extra={"intent": intent})
     return True
@@ -641,6 +663,10 @@ def classify_intent(text: str) -> dict:
     if norm_key in _ROUTING_CACHE:
         log.info("intent_classified_cache_hit", extra={"text": text})
         return _ROUTING_CACHE[norm_key]
+
+    if norm_key in _CONFIRMED_QUESTIONS:
+        log.info("intent_classified_confirmed_question", extra={"text": text})
+        return {"function": None, "confidence": "high", "score": 1.0, "via_llm": False}
 
     # ── Layer 1: semantic-router with description-based embeddings ───────
     layer1_name, top_score = _layer1_route_with(_intent_router, text)

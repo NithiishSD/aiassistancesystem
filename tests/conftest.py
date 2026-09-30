@@ -40,6 +40,10 @@ def pytest_configure(config):
     # test's stored result can never answer another's; cache tests turn it on.
     os.environ["ZEDEK_LLM_CACHE_PATH"] = os.path.join(lock_dir, "llm_cache.sqlite3")
     os.environ["LLM_CACHE"] = "off"
+    # Learned router phrases and corrected misroutes are the owner's data;
+    # classifier reads the path at import, so it is set before collection.
+    os.environ["ZEDEK_DYNAMIC_UTTERANCES_PATH"] = os.path.join(lock_dir, "dynamic_utterances.json")
+    os.environ["ZEDEK_MISROUTES_PATH"] = os.path.join(lock_dir, "misroutes.jsonl")
 
 
 def pytest_unconfigure(config):
