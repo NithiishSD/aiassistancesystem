@@ -19,6 +19,7 @@ routes:
 - academic_tracking
 - web_task
 - mcp_tool
+- daily_digest
 llm_tools:
 - search_files
 - disk_usage_by_folder
@@ -36,4 +37,5 @@ llm_tools:
 - academic_tracking
 - web_task
 - mcp_tool
+- daily_digest
 - general_question

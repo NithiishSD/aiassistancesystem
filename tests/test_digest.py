@@ -86,3 +86,35 @@ class TestCommitments:
 def test_nothing_to_report_is_empty(tracker):
     assert digest.build_digest(tracker, NOW, facts_fn=list) == ""
     assert digest.build_digest(tracker, NOW, facts_fn=lambda: [_fact("User's hobby: cricket")]) == ""
+
+
+# ── Asked for in plain language (OpenSpec change: digest-on-request) ─────────
+
+class TestOnRequest:
+    def test_the_request_routes_to_the_digest_without_a_model(self, monkeypatch):
+        import classifier
+        import orchestrator
+
+        monkeypatch.setattr(classifier, "query_llm_with_tools", lambda text: pytest.fail("escalated to the LLM"))
+        monkeypatch.setattr(orchestrator.llm_provider, "generate_chat", lambda *a, **k: pytest.fail("model call"))
+        monkeypatch.setattr(orchestrator.llm_provider, "local_chat", lambda *a, **k: pytest.fail("model call"))
+        monkeypatch.setattr(digest, "build_digest", lambda: "Daily digest — test")
+
+        decision = orchestrator.route_request("what should I focus on today")
+
+        assert decision.function == "daily_digest" and not decision.via_llm
+        assert orchestrator.execute(decision) == "Daily digest — test"
+
+    def test_nothing_to_report_says_so(self, monkeypatch):
+        import orchestrator
+        from routing_decision import RoutingDecision
+
+        monkeypatch.setattr(digest, "build_digest", lambda: "")
+        assert orchestrator.execute(RoutingDecision(function="daily_digest")) == "Nothing to report today."
+
+    def test_news_requests_are_not_the_digest(self):
+        import classifier
+
+        router = classifier._build_intent_router(include_dynamic=False)
+        for text in ("today's headlines please", "what are today's top news stories"):
+            assert classifier._layer1_route_with(router, text)[0] == "mcp_tool", text

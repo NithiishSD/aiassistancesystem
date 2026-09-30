@@ -1,7 +1,7 @@
 {
   "meta": {
-    "golden_sha256": "d14353bb600fdb7024980863ea1adbf2b0b695ed0137f7fc01db7dcf865fdd4c",
-    "static_phrase_count": 237,
+    "golden_sha256": "42cc1e4e89c03e75fa93287c8e44ae3ef1a90ef709074c89e84768841c64fbd8",
+    "static_phrase_count": 250,
     "semantic_router_version": "0.0.72",
     "date": "2026-09-30",
     "slice": "test"
@@ -23,6 +23,12 @@
       "precision": 1.0,
       "recall": 0.2727,
       "f1": 0.4286,
+      "support": 11
+    },
+    "daily_digest": {
+      "precision": 1.0,
+      "recall": 0.6364,
+      "f1": 0.7778,
       "support": 11
     },
     "directory_size": {
@@ -110,6 +116,6 @@
       "support": 11
     }
   },
-  "accuracy": 0.6096,
-  "escalation_rate": 0.4332
+  "accuracy": 0.6111,
+  "escalation_rate": 0.4293
 }

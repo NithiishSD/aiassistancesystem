@@ -1,0 +1,22 @@
+name: daily_digest
+summary: Tell you what to focus on today (stale and weak practice topics, things you said are coming up).
+handler: _run_daily_digest
+description: >-
+  User wants today's briefing or digest: what to focus on or prioritise today, what is pending or coming
+  up, a morning summary of their day. NOT for logging practice or asking about one topic's progress. Examples:
+  'what should I focus on today', 'give me my daily digest', 'brief me for today'.
+utterances:
+- >-
+  Give today's daily digest or morning briefing: what to focus on and prioritise today, what is pending,
+  due, or coming up soon.
+- what should I focus on today
+- give me my daily digest
+- brief me on my day
+- what is coming up that I should know about
+short_examples:
+- daily digest
+- my briefing for today
+- what matters today
+- what's pending for me
+- morning summary
+- today's priorities

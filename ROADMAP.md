@@ -265,7 +265,7 @@ Today Zedek only reacts. The academic tracker and memory already hold everything
 > "You haven't touched graphs in 12 days and you're at 40% there. Your DS exam is next
 > week — want three problems?"
 - [x] Daily digest job surfacing stale topics, weak areas, and upcoming commitments.
-- [ ] Follow-up: a routed intent so "what should I focus on today" works in plain language (needs golden-set rows).
+- [x] Follow-up: a routed intent so "what should I focus on today" works in plain language (needs golden-set rows). *Done in OpenSpec `digest-on-request`: capability `daily_digest` answers with the same digest, no model call. 22 golden rows; held-out TEST: precision 1.00, recall 0.64 (the rest escalate to the LLM, which now has the tool), every other class unchanged. The gate caught the first phrase set pulling "news headlines" requests away from the news tool; fixed with two `mcp_tool` phrases.*
 - Scheduled prompts are now standard across the field: Open WebUI Automations, LibreChat
   Scheduled Chats, Khoj automations, AnythingLLM Scheduled Jobs. Implement with
   APScheduler + SQLite (1–2 days). The digest itself is a stored prompt run on a cron,

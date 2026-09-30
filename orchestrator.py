@@ -1471,6 +1471,13 @@ def _run_academic_tracking(decision: RoutingDecision, domain: str) -> str:
     return _handle_academic_tracking(decision)
 
 
+def _run_daily_digest(decision: RoutingDecision, domain: str) -> str:
+    """Today's digest on request (ROADMAP D1): built from the tracker and stored
+    facts with no model call, the same text the scheduled job delivers."""
+    import digest
+    return digest.build_digest() or "Nothing to report today."
+
+
 def _run_unsupported(decision: RoutingDecision, domain: str) -> str:
     reason = "this request"  # no router sets a reason; kept for the reply text
     log.info("unsupported_capability_requested", extra={"reason": reason,

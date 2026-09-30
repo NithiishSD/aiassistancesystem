@@ -22,6 +22,8 @@ short_examples:
 - count words in this text
 - weather in mumbai
 - latest news headlines
+- news headlines for today
+- what is in the news this morning
 - codeforces rating of a user
 - search github repos
 - summarize this paragraph
