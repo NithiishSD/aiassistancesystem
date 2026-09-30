@@ -179,6 +179,6 @@ def test_help_lists_every_user_facing_capability():
 
 
 def test_qualified_mcp_name_goes_to_the_mcp_gate(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_execute_mcp_tool", lambda decision: "mcp:" + decision["function"])
+    monkeypatch.setattr(orchestrator, "_execute_mcp_tool", lambda decision: "mcp:" + decision.function)
     out = orchestrator.execute({"function": "mcp_weather_news_tools_get_weather", "_original_input": "x"})
     assert out == "mcp:mcp_weather_news_tools_get_weather"

@@ -315,9 +315,11 @@ capability as a folder containing a `SKILL.md` with a small metadata header:
 - Effort: 3–5 days to migrate everything. **Do not copy OpenClaw's public skill
   registry.** It had 1,184+ malicious skills. Capabilities stay local, reviewed code.
 
-### E2. Typed state between pipeline steps
+### E2. Typed state between pipeline steps ✅ DONE 2026-09-30
 Replace the free-form `dict` flowing through `route_request → execute` with a dataclass.
 This is the one genuinely useful idea to borrow from LangGraph — as a pattern, not a dependency.
+*Shipped as OpenSpec change `typed-routing-decision`: `routing_decision.RoutingDecision` replaces the dict; ~25 `.get(key, default)` reads became attributes, and an unknown key now raises instead of silently defaulting.*
+- [ ] **Owner decision (found during E2):** `_handle_correction`'s self-heal is meant to un-learn the phrase from the *previous* misrouted turn, but `LAST_ROUTING_DECISION` already holds the *current* correction turn, so it never fires on the earlier one. Fixing it naively would delete correctly learned phrases whenever a fact is corrected ("i live in X" → "that's outdated"). Options: remove the self-heal, or un-learn only when the user says the *routing* was wrong.
 
 ---
 

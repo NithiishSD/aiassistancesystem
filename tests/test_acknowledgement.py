@@ -73,14 +73,14 @@ class TestOrchestratorUsesSharedCheck:
             # clarifying question; isolate the acknowledgement guard under test.
             decision = orchestrator.route_request("port this javascript to typescript")
         mock_classify.assert_called_once()
-        assert decision["function"] == "coding_task"
+        assert decision.function == "coding_task"
 
     def test_pure_acknowledgement_short_circuits(self):
         with patch.object(orchestrator.classifier, "classify_intent") as mock_classify, \
              patch.object(orchestrator.classifier, "classify_domain", return_value="personal"):
             decision = orchestrator.route_request("okay thank you")
         mock_classify.assert_not_called()
-        assert decision["function"] is None
+        assert decision.function is None
 
     @pytest.mark.parametrize("text", ACKNOWLEDGEMENTS + NOT_ACKNOWLEDGEMENTS)
     def test_both_entry_points_agree(self, text):

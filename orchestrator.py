@@ -25,6 +25,7 @@ from tier_gate import gate
 import memory
 import capabilities
 import classifier
+from routing_decision import RoutingDecision
 import llm_provider
 import llm_schemas
 from coding_agent import CodingSpecialist
@@ -166,7 +167,7 @@ def _declared_write_targets(plan: dict) -> set[str]:
     default_target = os.path.join(coding_agent.CODING_WRITE_ROOT, "solution.py")
     declared.add(f"write:{default_target}")
     return declared
-LAST_ROUTING_DECISION: dict | None = None
+LAST_ROUTING_DECISION: RoutingDecision | None = None
 
 
 def _init_mcp() -> None:
@@ -476,7 +477,7 @@ def generate_ambiguity_reply(user_input: str, previous_input: str | None = None)
 # not Llama. See route_request() below.
 
 
-def route_request(user_input: str) -> dict:
+def route_request(user_input: str) -> RoutingDecision:
     """
     Phase 6.5: Uses the dedicated classifier (classifier.py) for intent +
     domain, NOT Llama. Llama is only invoked afterward, and only if a real
@@ -488,10 +489,10 @@ def route_request(user_input: str) -> dict:
 
     if classifier.is_acknowledgement(user_input):
         log.info("routing_acknowledgement_guard", extra={"user_input": user_input})
-        return {"function": None, "domain": classifier.classify_domain(user_input), "confidence": "high", "score": 0.0, "args": {}, "clarify": False}
+        return RoutingDecision(None, user_input, domain=classifier.classify_domain(user_input))
 
     if should_ask_ambiguous_term_question(user_input, [turn["content"] for turn in SESSION_HISTORY if turn["role"] == "user"]):
-        return {"function": None, "domain": classifier.classify_domain(user_input), "confidence": "high", "score": 0.0, "args": {}, "clarify": True}
+        return RoutingDecision(None, user_input, domain=classifier.classify_domain(user_input), clarify=True)
 
     intent_result = classifier.classify_intent(user_input)
     domain = classifier.classify_domain(user_input)
@@ -500,29 +501,28 @@ def route_request(user_input: str) -> dict:
     confidence = intent_result["confidence"]
     via_llm = intent_result.get("via_llm", False)
 
-    decision = {
-        "function": func_name,
-        "domain": domain,
-        "confidence": confidence,
-        "score": intent_result["score"],
-        "via_llm": via_llm,  # True when Layer 2 LLM tool-calling was used
-    }
+    decision = RoutingDecision(
+        function=func_name,
+        user_input=user_input,
+        domain=domain,
+        confidence=confidence,
+        score=intent_result["score"],
+        via_llm=via_llm,  # True when Layer 2 LLM tool-calling was used
+    )
 
     # Only real functions (not remember_fact/unsupported/None) need argument
     # extraction — and this is now a narrow, well-defined task for Llama,
     # not a classification decision.
     if func_name in AVAILABLE_FUNCTIONS:
         if func_name == "open_application":
-            decision["args"] = {"app_name": _extract_application_name(user_input)}
+            decision.args = {"app_name": _extract_application_name(user_input)}
         else:
-            decision["args"] = _extract_args(func_name, user_input)
+            decision.args = _extract_args(func_name, user_input)
     elif func_name == "mcp_tool" or (func_name and func_name.startswith("mcp_")):
-        decision["args"] = _extract_mcp_args(user_input, target_tool_qname=func_name if func_name.startswith("mcp_") else None)
-    else:
-        decision["args"] = {}
+        decision.args = _extract_mcp_args(user_input, target_tool_qname=func_name if func_name.startswith("mcp_") else None)
 
     log.info("routing_decision",
-             extra={"decision": {k: v for k, v in decision.items() if k != "args"},
+             extra={"decision": decision.log_fields(),
                     "via_llm": via_llm})
     return decision
 
@@ -740,10 +740,10 @@ def _handle_correction(raw_text: str, domain: str) -> str:
     Also self-heals by pruning any recently learned dynamic utterance that led to this mistake.
     """
     global LAST_ROUTING_DECISION
-    if LAST_ROUTING_DECISION and LAST_ROUTING_DECISION.get("via_llm"):
+    if LAST_ROUTING_DECISION and LAST_ROUTING_DECISION.via_llm:
         classifier.remove_utterance_dynamically(
-            LAST_ROUTING_DECISION.get("_original_input", ""),
-            LAST_ROUTING_DECISION.get("function")
+            LAST_ROUTING_DECISION.user_input,
+            LAST_ROUTING_DECISION.function
         )
     last_q = _last_assistant_question()
     search_query = f"{last_q} {raw_text}".strip() if last_q and len(raw_text.split()) <= 6 else raw_text
@@ -894,13 +894,13 @@ def format_coding_plan(plan: dict) -> str:
     )
 
 
-def _handle_research(decision: dict, domain: str) -> str:
+def _handle_research(decision: RoutingDecision, domain: str) -> str:
     """Dispatch a research question to the grounded ResearchAgent (Roadmap Item 10).
 
     The agent gates each of its own read-only tool calls internally, so no
     additional gate() call is needed here.
     """
-    question = decision.get("_original_input", "")
+    question = decision.user_input
     report = RESEARCH_AGENT.research(question, domain=domain)
 
     log.info("research_task_completed", extra={
@@ -909,7 +909,7 @@ def _handle_research(decision: dict, domain: str) -> str:
 
     # Only reinforce the router when the research actually produced grounded
     # evidence — a failed, ungrounded run is not a signal that routing was right.
-    if decision.get("via_llm") and report.grounded:
+    if decision.via_llm and report.grounded:
         classifier.add_utterance_dynamically(question, "research_task")
 
     return research_agent.format_research_report(report)
@@ -933,9 +933,9 @@ def _extract_academic_intent(user_input: str) -> dict:
     return {"action": "review"}
 
 
-def _handle_academic_tracking(decision: dict) -> str:
+def _handle_academic_tracking(decision: RoutingDecision) -> str:
     """Log a practice attempt or report on progress (Roadmap Item 14)."""
-    user_input = decision.get("_original_input", "")
+    user_input = decision.user_input
     extracted = _extract_academic_intent(user_input)
     action = extracted.get("action", "review")
 
@@ -952,7 +952,7 @@ def _handle_academic_tracking(decision: dict) -> str:
             return ("I couldn't tell which topic and outcome to record. Try something like "
                     "\"log that I solved a graphs problem in 20 minutes\".")
 
-        if decision.get("via_llm"):
+        if decision.via_llm:
             classifier.add_utterance_dynamically(user_input, "academic_tracking")
 
         log.info("academic_attempt_recorded", extra={"topic": attempt.topic, "result": attempt.result})
@@ -962,11 +962,11 @@ def _handle_academic_tracking(decision: dict) -> str:
                 f"That's {stats.solved}/{stats.attempts} solved on {attempt.topic} so far.")
 
     if action == "summary":
-        if decision.get("via_llm"):
+        if decision.via_llm:
             classifier.add_utterance_dynamically(user_input, "academic_tracking")
         return academic_tracker.format_summary(ACADEMIC_TRACKER.summary())
 
-    if decision.get("via_llm"):
+    if decision.via_llm:
         classifier.add_utterance_dynamically(user_input, "academic_tracking")
     return academic_tracker.format_recommendations(ACADEMIC_TRACKER.recommend())
 
@@ -977,14 +977,14 @@ def _interactive_confirm(message: str) -> bool:
     return input("> ").strip().lower() == "y"
 
 
-def _handle_web_task(decision: dict) -> str:
+def _handle_web_task(decision: RoutingDecision) -> str:
     """Dispatch a browsing goal to the WebAgent (Roadmap Item 10).
 
     Browser tools are Tier 2, so every action stops for typed confirmation.
     The agent gates each action itself; confirmation is injected here so the
     agent can never self-approve.
     """
-    goal = decision.get("_original_input", "")
+    goal = decision.user_input
     urls = research_agent.extract_urls(goal)
     start_url = urls[0] if urls else None
 
@@ -994,18 +994,18 @@ def _handle_web_task(decision: dict) -> str:
         "completed": report.completed, "steps": len(report.steps),
     })
 
-    if decision.get("via_llm") and report.completed:
+    if decision.via_llm and report.completed:
         classifier.add_utterance_dynamically(goal, "web_task")
 
     return web_agent.format_browse_report(report)
 
 
-def _execute_mcp_tool(decision: dict) -> str:
+def _execute_mcp_tool(decision: RoutingDecision) -> str:
     """Dispatch to MCP layer. Tier gate is called internally — callers need not."""
-    args_dict = decision.get("args", {})
+    args_dict = decision.args
     qualified_name = args_dict.get("qualified_name", "")
     tool_args = args_dict.get("tool_args", {})
-    original_input = decision.get("_original_input", "")
+    original_input = decision.user_input
 
     if not qualified_name:
         # Try finding tool directly from original input
@@ -1052,7 +1052,7 @@ def _execute_mcp_tool(decision: dict) -> str:
     output = result.get("result", "")
     log.info("mcp_tool_execution_success", extra={"qualified_name": qualified_name})
 
-    if decision.get("via_llm"):
+    if decision.via_llm:
         classifier.add_utterance_dynamically(original_input, "mcp_tool")
 
     if output is None or output == "":
@@ -1060,18 +1060,17 @@ def _execute_mcp_tool(decision: dict) -> str:
     return str(output)
 
 
-def execute(decision: dict) -> str:
+def execute(decision: RoutingDecision | dict) -> str:
     """Validates the routing decision against the capability registry and hands
     it to that capability's handler (``handler:`` in capabilities/<name>.yaml).
     Gating lives in the handlers: the tier gate for native functions and MCP
     tools, the coding checkpoints, the agents' per-tool gates."""
-    func_name = decision.get("function")
-    domain = decision.get("domain", "personal")
-    if domain not in ("personal", "academic"):
-        domain = "personal"
-
-    confidence = decision.get("confidence", "high")
-    original_input = decision.get("_original_input", "")
+    if isinstance(decision, dict):  # legacy shape; unknown keys raise
+        decision = RoutingDecision.from_dict(decision)
+    func_name = decision.function
+    domain = decision.domain
+    confidence = decision.confidence
+    original_input = decision.user_input
     capability = capabilities.CAPABILITIES.get(func_name) if func_name else None
 
     if capability is not None and capability.runs_when_unsure:
@@ -1104,12 +1103,12 @@ def _capability_handler(capability: "capabilities.Capability"):
 
 # ── Capability handlers: (decision, domain) -> reply ─────────────────────────
 
-def _run_general_question(decision: dict, domain: str) -> str:
-    return answer_general_question(decision.get("_original_input", ""), domain)
+def _run_general_question(decision: RoutingDecision, domain: str) -> str:
+    return answer_general_question(decision.user_input, domain)
 
 
-def _run_coding_task(decision: dict, domain: str) -> str:
-    original_input = decision.get("_original_input", "")
+def _run_coding_task(decision: RoutingDecision, domain: str) -> str:
+    original_input = decision.user_input
     # ── Checkpoint 1: Tier gate ──────────────────────────────────────
     coding_gate = gate("coding_task", {}, user_input=original_input)
     if coding_gate["action"] == "blocked":
@@ -1145,7 +1144,7 @@ def _run_coding_task(decision: dict, domain: str) -> str:
     log.info("coding_plan_approved", extra={"goal": plan.get("goal", "")})
 
     # Execution verified: plan approved by user
-    if decision.get("via_llm"):
+    if decision.via_llm:
         classifier.add_utterance_dynamically(original_input, "coding_task")
 
     # Register the approved plan with the watchdog so any write to a file
@@ -1214,9 +1213,9 @@ def _run_coding_task(decision: dict, domain: str) -> str:
     return summary
 
 
-def _run_remember_fact(decision: dict, domain: str) -> str:
-    original_input = decision.get("_original_input", "")
-    fact_text = decision.get("_original_input", "")
+def _run_remember_fact(decision: RoutingDecision, domain: str) -> str:
+    original_input = decision.user_input
+    fact_text = decision.user_input
     canonical_facts = canonicalize_fact(fact_text)
     if not canonical_facts:
         # Router likely misclassified a question/non-fact as remember_fact.
@@ -1228,61 +1227,61 @@ def _run_remember_fact(decision: dict, domain: str) -> str:
         log.info("fact_remembered", extra={"domain": domain, "text": c_fact})
 
     # Execution verified: facts canonicalized and stored
-    if decision.get("via_llm"):
+    if decision.via_llm:
         classifier.add_utterance_dynamically(original_input, "remember_fact")
 
     return _acknowledge_fact(fact_text)
 
 
-def _run_correct_fact(decision: dict, domain: str) -> str:
-    return _handle_correction(decision.get("_original_input", ""), domain)
+def _run_correct_fact(decision: RoutingDecision, domain: str) -> str:
+    return _handle_correction(decision.user_input, domain)
 
 
-def _run_system_inspect(decision: dict, domain: str) -> str:
-    return _handle_system_inspect(decision.get("_original_input", ""), domain)
+def _run_system_inspect(decision: RoutingDecision, domain: str) -> str:
+    return _handle_system_inspect(decision.user_input, domain)
 
 
-def _run_research_task(decision: dict, domain: str) -> str:
+def _run_research_task(decision: RoutingDecision, domain: str) -> str:
     return _handle_research(decision, domain)
 
 
-def _run_web_task(decision: dict, domain: str) -> str:
+def _run_web_task(decision: RoutingDecision, domain: str) -> str:
     return _handle_web_task(decision)
 
 
-def _run_academic_tracking(decision: dict, domain: str) -> str:
+def _run_academic_tracking(decision: RoutingDecision, domain: str) -> str:
     return _handle_academic_tracking(decision)
 
 
-def _run_unsupported(decision: dict, domain: str) -> str:
-    reason = decision.get("reason", "this request")
+def _run_unsupported(decision: RoutingDecision, domain: str) -> str:
+    reason = "this request"  # no router sets a reason; kept for the reply text
     log.info("unsupported_capability_requested", extra={"reason": reason,
-                                                           "user_input": decision.get("_original_input", "")})
+                                                           "user_input": decision.user_input})
     return f"That capability ({reason}) isn't built yet — it's on the roadmap and still in progress."
 
 
-def _run_mcp_tool(decision: dict, domain: str) -> str:
+def _run_mcp_tool(decision: RoutingDecision, domain: str) -> str:
     return _execute_mcp_tool(decision)
 
 
-def _run_native_function(decision: dict, domain: str) -> str:
+def _run_native_function(decision: RoutingDecision, domain: str) -> str:
     """A system_agent function: allowlist, argument coercion, tier gate, run."""
-    func_name = decision.get("function")
-    original_input = decision.get("_original_input", "")
+    func_name = decision.function
+    original_input = decision.user_input
     if func_name not in AVAILABLE_FUNCTIONS:
         log.info("execution_blocked_not_in_allowlist", extra={"attempted_function": func_name})
         return f"Blocked: '{func_name}' is not an allowed function."
 
-    args = decision.get("args", {})
+    args = decision.args
     args = _coerce_arg_types(func_name, args)
 
     if func_name == "open_application":
         app_name = (args.get("app_name") or "").strip()
         if not app_name:
-            log.info("open_application_missing_app_name", extra={"user_input": decision.get("_original_input", "")})
+            log.info("open_application_missing_app_name", extra={"user_input": decision.user_input})
             return "Which application would you like me to open? (e.g. Brave, VS Code, Calculator)"
 
-    gate_decision = gate(func_name, args, user_input=decision.get("_original_input", ""))
+    gate_decision = gate(func_name, args, user_input=decision.user_input)
 
     if gate_decision["action"] == "blocked":
         return gate_decision["message"]
@@ -1303,7 +1302,7 @@ def _run_native_function(decision: dict, domain: str) -> str:
         log.info("execution_success", extra={"function": func_name, "call_args": args})
 
         # Execution-verified dynamic learning: only persist if action truly succeeded
-        if decision.get("via_llm"):
+        if decision.via_llm:
             if func_name == "open_application":
                 if isinstance(result, dict) and result.get("launched") is True:
                     classifier.add_utterance_dynamically(original_input, "open_application")
@@ -1443,11 +1442,8 @@ def _handle_single(user_input: str) -> str:
     """
     global LAST_ROUTING_DECISION
     decision = route_request(user_input)
-    decision["_original_input"] = user_input
     LAST_ROUTING_DECISION = decision
-    domain = decision.get("domain", "personal")
-    if domain not in ("personal", "academic"):
-        domain = "personal"
+    domain = decision.domain
 
     answer = execute(decision)
 
