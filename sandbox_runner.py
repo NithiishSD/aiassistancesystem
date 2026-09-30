@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import enum
+import fnmatch
 import os
 import resource
 import shutil
@@ -36,6 +37,53 @@ from typing import Any
 from zedek_logger import get_logger
 
 log = get_logger("sandbox_runner")
+
+
+# ── Secret material (ROADMAP B3) ─────────────────────────────────────────────
+# The child environment is already clean; these keep keys out through files and
+# extra_env. The rlimit fallback has no filesystem isolation, so it is not a
+# secret boundary: code there can read any file the user can by absolute path.
+
+_HEAVY_DIRS = {
+    ".git", "__pycache__", ".pytest_cache", ".venv", "zedek-env",
+    "node_modules", ".backups", ".idea", ".vscode",
+}
+_SECRET_FILE_PATTERNS = (
+    ".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ecdsa*", "id_ed25519*",
+    ".netrc", ".pypirc", ".npmrc", "credentials*.json",
+)
+_SAFE_SUFFIXES = (".example", ".sample", ".template")
+_SECRET_ENV_SUFFIXES = ("_API_KEY", "_KEY", "_TOKEN", "_SECRET")
+
+
+def is_secret_file(name: str) -> bool:
+    """Whether a file's base name marks it as holding credentials."""
+    lowered = name.lower()
+    if lowered.endswith(_SAFE_SUFFIXES):
+        return False
+    return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in _SECRET_FILE_PATTERNS)
+
+
+def _is_secret_env_name(name: str) -> bool:
+    upper = name.upper()
+    return upper.endswith(_SECRET_ENV_SUFFIXES) or "PASSWORD" in upper
+
+
+def _secret_env_values() -> set[str]:
+    return {v for k, v in os.environ.items() if v and _is_secret_env_name(k)}
+
+
+def _secret_files(root: str) -> list[str]:
+    """Secret files anywhere under root, skipping the dirs the mirror skips."""
+    found: list[str] = []
+    for current, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in _HEAVY_DIRS]
+        found.extend(os.path.join(current, f) for f in files if is_secret_file(f))
+    return found
+
+
+def _mirror_ignore(_directory: str, names: list[str]) -> set[str]:
+    return {n for n in names if n in _HEAVY_DIRS or is_secret_file(n)}
 
 
 class SandboxMode(str, enum.Enum):
@@ -64,7 +112,34 @@ class ExecutionResult:
         }
 
 
-def _apply_rlimits(timeout_seconds: int, max_memory_mb: int = 512) -> None:
+_SANDBOX_PROCESS_BUDGET = 64
+
+
+def _process_limit() -> int:
+    """RLIMIT_NPROC counts every thread of the user, not just the sandbox's, so
+    a flat 64 fails the first fork on a desktop session (well over a thousand
+    threads). Allow 64 beyond what the user already runs, computed in the
+    parent; if /proc is unreadable, fall back to the flat budget."""
+    uid, count = str(os.getuid()), 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return _SANDBOX_PROCESS_BUDGET
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/status", encoding="utf-8") as f:
+                fields = dict(line.split(":", 1) for line in f if ":" in line)
+        except OSError:
+            continue
+        if fields.get("Uid", "").split()[:1] == [uid]:
+            count += int(fields.get("Threads", "1").strip() or 1)
+    return count + _SANDBOX_PROCESS_BUDGET
+
+
+def _apply_rlimits(timeout_seconds: int, max_memory_mb: int = 512,
+                   max_processes: int = _SANDBOX_PROCESS_BUDGET) -> None:
     """Set hard and soft resource limits inside the child process."""
     # CPU Time limit
     cpu_limit = max(1, timeout_seconds + 1)
@@ -79,7 +154,7 @@ def _apply_rlimits(timeout_seconds: int, max_memory_mb: int = 512) -> None:
 
     # Process count limit (fork-bomb prevention)
     try:
-        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+        resource.setrlimit(resource.RLIMIT_NPROC, (max_processes, max_processes))
     except (ValueError, OSError):
         pass
 
@@ -88,6 +163,20 @@ def _apply_rlimits(timeout_seconds: int, max_memory_mb: int = 512) -> None:
         resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
     except (ValueError, OSError):
         pass
+
+
+# Read-only system mounts shared by the probe and every run, so the probe tests
+# exactly what a run needs (without /lib the dynamic loader is missing and
+# every exec fails). -try: /lib64 does not exist on every architecture.
+_BWRAP_SYSTEM_BINDS = [
+    "--ro-bind", "/usr", "/usr",
+    "--ro-bind", "/bin", "/bin",
+    "--ro-bind", "/lib", "/lib",
+    "--ro-bind-try", "/lib64", "/lib64",
+    "--proc", "/proc",
+    "--dev", "/dev",
+    "--tmpfs", "/tmp",
+]
 
 
 def _is_bwrap_functional() -> bool:
@@ -99,8 +188,7 @@ def _is_bwrap_functional() -> bool:
     try:
         # Test minimal bwrap invocation
         res = subprocess.run(
-            [bwrap_path, "--ro-bind", "/usr", "/usr", "--proc", "/proc", "--dev", "/dev",
-             "--tmpfs", "/tmp", "/usr/bin/true"],
+            [bwrap_path, "--unshare-all", *_BWRAP_SYSTEM_BINDS, "/usr/bin/true"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -304,20 +392,15 @@ class SandboxRunner:
         else:
             bwrap_cmd += ["--unshare-all"]
 
-        bwrap_cmd += [
-            "--die-with-parent",
-            "--new-session",
-            "--clearenv",
-            "--setenv", "PATH", os.environ.get("PATH", "/usr/bin:/bin"),
-            "--setenv", "HOME", "/tmp",
-            "--ro-bind", "/usr", "/usr",
-            "--ro-bind", "/bin", "/bin",
-            "--ro-bind", "/lib", "/lib",
-            "--ro-bind", "/lib64", "/lib64",
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "--tmpfs", "/tmp",
-        ]
+        # The child gets exactly the clean environment the rlimit path uses.
+        clean_env = self._build_clean_env(extra_env, work_dir)
+        if mode == SandboxMode.PROJECT_READ_ONLY and project_root:
+            existing_pp = clean_env.get("PYTHONPATH", "")
+            clean_env["PYTHONPATH"] = f"{project_root}:{existing_pp}" if existing_pp else project_root
+        bwrap_cmd += ["--die-with-parent", "--new-session", "--clearenv"]
+        for key, value in clean_env.items():
+            bwrap_cmd += ["--setenv", key, value]
+        bwrap_cmd += _BWRAP_SYSTEM_BINDS
 
         # Bind virtualenv if running in virtualenv
         venv_path = sys.prefix
@@ -327,13 +410,21 @@ class SandboxRunner:
         # Bind working directory (read-write inside sandbox)
         bwrap_cmd += ["--bind", work_dir, work_dir]
 
+        secrets: list[str] = []
         if mode == SandboxMode.PROJECT_READ_ONLY and project_root and os.path.isdir(project_root):
             bwrap_cmd += ["--ro-bind", project_root, project_root]
+            secrets = _secret_files(project_root)
 
-        bwrap_cmd += ["--chdir", work_dir, "--"] + cmd
+        max_processes = _process_limit()
+        # Secret files are masked with an empty regular file (later mounts win);
+        # /dev/null cannot be used, the tmpfs holding the project is nodev.
+        with tempfile.NamedTemporaryFile(prefix="zedek-mask-") as mask:
+            for secret in secrets:
+                bwrap_cmd += ["--ro-bind", mask.name, secret]
+            bwrap_cmd += ["--chdir", work_dir, "--"] + cmd
+            return self._run_bwrap(bwrap_cmd, max_processes)
 
-        clean_env = self._build_clean_env(extra_env, work_dir)
-
+    def _run_bwrap(self, bwrap_cmd: list[str], max_processes: int) -> ExecutionResult:
         try:
             proc = subprocess.run(
                 bwrap_cmd,
@@ -344,8 +435,8 @@ class SandboxRunner:
                 timeout=self.timeout_seconds,
                 check=False,
                 start_new_session=True,
-                env=clean_env,
-                preexec_fn=lambda: _apply_rlimits(self.timeout_seconds, self.max_memory_mb),
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},  # bwrap itself; the child gets --setenv
+                preexec_fn=lambda: _apply_rlimits(self.timeout_seconds, self.max_memory_mb, max_processes),
             )
             stdout = proc.stdout[:self.max_output_bytes]
             stderr = proc.stderr[:self.max_output_bytes]
@@ -374,6 +465,7 @@ class SandboxRunner:
     ) -> ExecutionResult:
         """Run command under process isolation with OS resource limits."""
         clean_env = self._build_clean_env(extra_env, work_dir)
+        max_processes = _process_limit()
         if project_root:
             existing_pp = clean_env.get("PYTHONPATH", "")
             clean_env["PYTHONPATH"] = f"{project_root}:{existing_pp}" if existing_pp else project_root
@@ -390,7 +482,7 @@ class SandboxRunner:
                 check=False,
                 start_new_session=True,
                 env=clean_env,
-                preexec_fn=lambda: _apply_rlimits(self.timeout_seconds, self.max_memory_mb),
+                preexec_fn=lambda: _apply_rlimits(self.timeout_seconds, self.max_memory_mb, max_processes),
             )
             stdout = proc.stdout[:self.max_output_bytes]
             stderr = proc.stderr[:self.max_output_bytes]
@@ -427,25 +519,26 @@ class SandboxRunner:
             base_env["VIRTUAL_ENV"] = os.environ["VIRTUAL_ENV"]
 
         if extra_env:
+            secret_values = _secret_env_values()
             for k, v in extra_env.items():
-                if k not in ("LD_PRELOAD", "LD_LIBRARY_PATH"):  # block injection
-                    base_env[k] = v
+                if k in ("LD_PRELOAD", "LD_LIBRARY_PATH"):  # block injection
+                    continue
+                if _is_secret_env_name(k) or (v and v in secret_values):
+                    log.info("sandbox_env_secret_dropped", extra={"name": k})
+                    continue
+                base_env[k] = v
         return base_env
 
     def _mirror_project(self, src: str, dest: str) -> None:
         """Fast mirror of source project files to destination, ignoring caches/heavy directories."""
-        ignore_patterns = {
-            ".git", "__pycache__", ".pytest_cache", ".venv", "zedek-env",
-            "node_modules", ".backups", ".idea", ".vscode"
-        }
         for item in os.listdir(src):
-            if item in ignore_patterns:
+            if _mirror_ignore(src, [item]):  # heavy dirs and secret files (B3)
                 continue
             s_item = os.path.join(src, item)
             d_item = os.path.join(dest, item)
             try:
                 if os.path.isdir(s_item):
-                    shutil.copytree(s_item, d_item, ignore=shutil.ignore_patterns(*ignore_patterns))
+                    shutil.copytree(s_item, d_item, ignore=_mirror_ignore)
                 elif os.path.isfile(s_item):
                     shutil.copy2(s_item, d_item)
             except OSError:

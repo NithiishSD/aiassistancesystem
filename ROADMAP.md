@@ -173,10 +173,10 @@ Tier 1. **That lane fails open.**
       floor, rather than inferring risk from prose.
 - [x] Hash/version-lock servers; detect metadata drift ("rug pull").
 
-### B3. Keep API keys out of the sandbox
-`.env` values live in the ambient process environment, so code executed in-process could
-read them. The sandbox isolates the agent but not the secret.
-- [ ] Scrub provider keys from the sandbox child's environment.
+### B3. Keep API keys out of the sandbox ✅ DONE 2026-09-30
+*Shipped as OpenSpec change `sandbox-secret-scrub`. The child environment was already clean; keys still reached sandboxed code through files. Secret files (`.env`, `*.pem`, `id_*`, `credentials*.json`, …) are now left out of the copy-on-write mirror and masked under bubblewrap's read-only project mode, and secret-looking `extra_env` names are dropped. **Found while testing: bubblewrap had never run.** Its probe lacked `/lib`, so every run silently used the rlimit fallback; behind that, `RLIMIT_NPROC=64` counted all of the user's ~1,800 threads, `--clearenv` dropped the runner's environment, and read-only mode lacked `PYTHONPATH`. All fixed, so sandboxed code now really runs with no network, a private /tmp and a read-only system.*
+- [x] Scrub provider keys from the sandbox child's environment (and its files).
+- Known limit: the rlimit fallback (only when bubblewrap is unusable) has no filesystem isolation and is not a secret boundary.
 
 ### B4. Egress allowlist for network-enabled sandbox runs
 - [ ] When `allow_network=True`, restrict to an FQDN allowlist rather than the open internet.
